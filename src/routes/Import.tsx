@@ -22,6 +22,8 @@ export default function ImportPage() {
     )
   }
 
+  const isCustom = activeDataset?.format === 'custom-raw'
+
   return (
     <div className="page">
       <div className="page-header">
@@ -32,12 +34,12 @@ export default function ImportPage() {
             parsing.
           </p>
         </div>
-        <button className="btn" onClick={loadSelectedDataset}>
+        <button className="btn" onClick={loadSelectedDataset} disabled={isCustom}>
           Load Selected Dataset
         </button>
       </div>
 
-      {status === 'custom' && (
+      {(isCustom || status === 'custom') && (
         <div className="card warning">
           Custom parsing not configured. Implement parsing in
           <code> src/data/normalization/customAdapter.ts</code> and retry.
