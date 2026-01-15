@@ -56,7 +56,7 @@ export const buildRankingCsv = (players: PlayerComputed[], windowKey: WindowKey)
       'Score',
       'BaseStats/Day (Year)',
       'BaseStats/Day (Window)',
-      'Level Δ (Window)',
+      'Level Delta (Window)',
       'Mine/Day (Window)',
       'Treasury/Day (Window)',
       'Coverage Points',
@@ -70,7 +70,7 @@ export const buildRankingCsv = (players: PlayerComputed[], windowKey: WindowKey)
       player.name,
       player.server,
       player.latestGuildName ?? player.latestGuildKey ?? '',
-      player.score.toFixed(3),
+      (player.scoreByWindow?.[windowKey] ?? player.score).toFixed(3),
       player.baseStatsPerDayYear.toFixed(2),
       player.windowMetrics.baseStats[windowKey]?.perDay?.toFixed(2) ?? '0',
       player.windowMetrics.level[windowKey]?.delta?.toFixed(0) ?? '0',
@@ -92,15 +92,68 @@ export const buildMarkdownReport = (result: WorkerResult) => {
     `# Guild Analytics Report`,
     ``,
     `Latest scan: ${result.latestDate}`,
-    `Range: ${result.rangeStart} → ${result.latestDate}`,
+    `Range: ${result.rangeStart} -> ${result.latestDate}`,
     `Players: ${result.players.length}`,
     `Main / Wing: ${mainCount} / ${wingCount}`,
     ``,
     `## Top 5 (Score)`,
     ...topPlayers.map(
       (player, index) =>
-        `${index + 1}. ${player.name} (${player.latestGuildName ?? player.latestGuildKey ?? '—'})`,
+        `${index + 1}. ${player.name} (${player.latestGuildName ?? player.latestGuildKey ?? '-'})`,
     ),
   ]
   return lines.join('\n')
+}
+
+export const buildToplistCsv = (
+  entries: Array<{
+    playerKey: string
+    name: string
+    guildKey?: string
+    perDay: number
+    delta: number
+  }>,
+  metricLabel: string,
+  windowKey: WindowKey,
+) => {
+  const rows: Array<Array<string | number>> = [
+    ['Rank', 'Player', 'Guild', `Value (${metricLabel})`, 'Per Day', 'Delta', 'Window'],
+  ]
+  entries.forEach((entry, index) => {
+    rows.push([
+      index + 1,
+      entry.name,
+      entry.guildKey ?? '',
+      metricLabel,
+      entry.perDay.toFixed(2),
+      entry.delta.toFixed(0),
+      `${windowKey} mo`,
+    ])
+  })
+  return toCsv(rows)
+}
+
+export const buildGuildSummaryCsv = (result: WorkerResult) => {
+  const rows: Array<Array<string | number>> = [
+    [
+      'Guild',
+      'Members (Latest)',
+      'BaseStats/Day',
+      'Level Median',
+      'Mine Pace',
+      'Treasury Pace',
+    ],
+  ]
+  result.guilds.forEach((guild) => {
+    const latest = guild.points[guild.points.length - 1]
+    rows.push([
+      guild.guildName,
+      latest?.memberCount ?? 0,
+      guild.baseStatsPerDayYear.toFixed(2),
+      guild.levelMedianLatest.toFixed(0),
+      guild.minePerDayYear.toFixed(2),
+      guild.treasuryPerDayYear.toFixed(2),
+    ])
+  })
+  return toCsv(rows)
 }

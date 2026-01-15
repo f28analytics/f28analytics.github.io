@@ -1,8 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useData } from '../data/store'
-import BarChart from '../ui/charts/BarChart'
-import LineChart from '../ui/charts/LineChart'
+import AnchoredLineCard from '../ui/charts/AnchoredLineCard'
 import { formatDate, formatNumber } from '../ui/format'
 
 export default function PlayerDetail() {
@@ -11,10 +10,11 @@ export default function PlayerDetail() {
   const { result } = useData()
   const decodedKey = playerKey ? decodeURIComponent(playerKey) : ''
 
-  const player = useMemo(
-    () => result?.players.find((entry) => entry.playerKey === decodedKey) ?? null,
-    [result, decodedKey],
-  )
+  const player = useMemo(() => {
+    if (!result) return null
+    const source = result.globalPlayers?.length ? result.globalPlayers : result.players
+    return source.find((entry) => entry.playerKey === decodedKey) ?? null
+  }, [result, decodedKey])
 
   if (!result || !player) {
     return (
@@ -32,10 +32,24 @@ export default function PlayerDetail() {
 
   const firstPoint = player.points[0]
   const lastPoint = player.points[player.points.length - 1]
-  const baseIntervals = player.intervals.baseStats.map((interval) => ({
-    label: formatDate(interval.endDate),
-    value: interval.perDay,
-  }))
+  const { chartPoints, rangeLabel } = useMemo(() => {
+    if (!player.points.length) {
+      return { chartPoints: [], rangeLabel: 'Full history' }
+    }
+    const endDate = new Date(player.points[player.points.length - 1].date)
+    const startDate = new Date(endDate)
+    startDate.setMonth(startDate.getMonth() - 12)
+    const filtered = player.points.filter((point) => new Date(point.date) >= startDate)
+    const useWindow = filtered.length >= 2
+    return {
+      chartPoints: useWindow ? filtered : player.points,
+      rangeLabel: useWindow ? 'Last 12 months' : 'Full history',
+    }
+  }, [player.points])
+  const expSeries = useMemo(
+    () => chartPoints.map((point) => point.expTotal ?? 0),
+    [chartPoints],
+  )
 
   return (
     <div className="page">
@@ -43,7 +57,7 @@ export default function PlayerDetail() {
         <div>
           <h1 className="page-title">{player.name}</h1>
           <p className="page-subtitle">
-            {player.server} · {player.latestGuildName ?? player.latestGuildKey ?? '—'}
+            {player.server} - {player.latestGuildName ?? player.latestGuildKey ?? '-'}
           </p>
         </div>
         <button className="btn ghost" onClick={() => navigate('/ranking')}>
@@ -56,17 +70,17 @@ export default function PlayerDetail() {
           <h2 className="card-title">BaseStats/Day (Year)</h2>
           <div className="metric">{formatNumber(player.baseStatsPerDayYear, 1)}</div>
           <div className="muted">
-            Best: {formatNumber(player.bestInterval?.perDay ?? 0, 1)} · Worst:{' '}
+            Best: {formatNumber(player.bestInterval?.perDay ?? 0, 1)} - Worst:{' '}
             {formatNumber(player.worstInterval?.perDay ?? 0, 1)}
           </div>
         </div>
         <div className="card">
           <h2 className="card-title">Coverage</h2>
           <div className="metric">
-            {player.coverage.points} pts · {player.coverage.days}d
+            {player.coverage.points} pts - {player.coverage.days}d
           </div>
           <div className="muted">
-            {formatDate(firstPoint?.date)} → {formatDate(lastPoint?.date)}
+            {formatDate(firstPoint?.date)} to {formatDate(lastPoint?.date)}
           </div>
         </div>
         <div className="card">
@@ -76,47 +90,57 @@ export default function PlayerDetail() {
         </div>
       </section>
 
-      <section className="card">
-        <h2 className="card-title">BaseStats Progress</h2>
-        <LineChart
-          points={player.points.map((point) => ({ date: point.date, value: point.baseStats }))}
+      <section className="grid three-col">
+        <AnchoredLineCard
+          title="BaseStats Verlauf"
+          subtitle={rangeLabel}
+          series={{
+            label: 'BaseStats',
+            points: chartPoints.map((point) => point.baseStats),
+          }}
+          latestLabel="BaseStats (latest)"
+          startLabel="BaseStats (start)"
         />
-        <div className="chart-subtitle">Interval BaseStats/Day</div>
-        <BarChart points={baseIntervals} />
-      </section>
-
-      <section className="grid two-col">
-        <div className="card">
-          <h2 className="card-title">Level Progress</h2>
-          <LineChart
-            points={player.points.map((point) => ({ date: point.date, value: point.level }))}
-            color="#8ec5ff"
-          />
-          <div className="muted">
-            Δ {formatNumber((lastPoint?.level ?? 0) - (firstPoint?.level ?? 0), 0)}
-          </div>
-        </div>
-        <div className="card">
-          <h2 className="card-title">Mine Progress</h2>
-          <LineChart
-            points={player.points.map((point) => ({ date: point.date, value: point.mine }))}
-            color="#f6b26b"
-          />
-          <div className="muted">
-            Δ {formatNumber((lastPoint?.mine ?? 0) - (firstPoint?.mine ?? 0), 0)}
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Treasury Progress</h2>
-        <LineChart
-          points={player.points.map((point) => ({ date: point.date, value: point.treasury }))}
-          color="#d17cff"
+        <AnchoredLineCard
+          title="Level Verlauf"
+          subtitle={rangeLabel}
+          series={{
+            label: 'Level',
+            points: chartPoints.map((point) => point.level),
+          }}
+          latestLabel="Level (latest)"
+          startLabel="Level (start)"
         />
-        <div className="muted">
-          Δ {formatNumber((lastPoint?.treasury ?? 0) - (firstPoint?.treasury ?? 0), 0)}
-        </div>
+        <AnchoredLineCard
+          title="Mine Verlauf"
+          subtitle={rangeLabel}
+          series={{
+            label: 'Mine',
+            points: chartPoints.map((point) => point.mine),
+          }}
+          latestLabel="Mine (latest)"
+          startLabel="Mine (start)"
+        />
+        <AnchoredLineCard
+          title="Treasury Verlauf"
+          subtitle={rangeLabel}
+          series={{
+            label: 'Treasury',
+            points: chartPoints.map((point) => point.treasury),
+          }}
+          latestLabel="Treasury (latest)"
+          startLabel="Treasury (start)"
+        />
+        <AnchoredLineCard
+          title="Exp Verlauf"
+          subtitle={rangeLabel}
+          series={{
+            label: 'Exp',
+            points: expSeries,
+          }}
+          latestLabel="Exp (latest)"
+          startLabel="Exp (start)"
+        />
       </section>
     </div>
   )

@@ -1,7 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useData } from '../data/store'
 import type { WindowKey } from '../data/types'
-import { buildMarkdownReport, buildRankingCsv, buildRecommendationCsv } from '../data/compute/csv'
+import {
+  buildGuildSummaryCsv,
+  buildMarkdownReport,
+  buildRankingCsv,
+  buildRecommendationCsv,
+} from '../data/compute/csv'
 
 const WINDOW_KEYS: WindowKey[] = ['1', '3', '6', '12']
 
@@ -15,9 +20,11 @@ const downloadCsv = (filename: string, content: string) => {
 }
 
 export default function ExportPage() {
-  const { result } = useData()
-  const [windowKey, setWindowKey] = useState<WindowKey>('6')
+  const { result, defaultWindowKey, updateDefaultWindowKey } = useData()
+  const [windowKey, setWindowKey] = useState<WindowKey>(defaultWindowKey)
   const report = useMemo(() => (result ? buildMarkdownReport(result) : ''), [result])
+
+  useEffect(() => setWindowKey(defaultWindowKey), [defaultWindowKey])
 
   if (!result) {
     return (
@@ -70,7 +77,11 @@ export default function ExportPage() {
             <select
               className="select"
               value={windowKey}
-              onChange={(event) => setWindowKey(event.target.value as WindowKey)}
+              onChange={(event) => {
+                const value = event.target.value as WindowKey
+                setWindowKey(value)
+                updateDefaultWindowKey(value)
+              }}
             >
               {WINDOW_KEYS.map((key) => (
                 <option key={key} value={key}>
@@ -89,6 +100,20 @@ export default function ExportPage() {
             }
           >
             Export Ranking CSV
+          </button>
+        </div>
+        <div className="card">
+          <h2 className="card-title">Guild Summary</h2>
+          <button
+            className="btn"
+            onClick={() =>
+              downloadCsv(
+                `guild-summary-${result.datasetId}.csv`,
+                buildGuildSummaryCsv(result),
+              )
+            }
+          >
+            Export Guild Summary
           </button>
         </div>
       </section>

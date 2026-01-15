@@ -36,7 +36,7 @@ export default function AppShell() {
           </label>
           <div className={`status-badge status-${status}`}>
             {status === 'loading' && (statusMessage || 'Loading')}
-            {status === 'ready' && `Ready · ${activeDataset?.label ?? ''}`}
+            {status === 'ready' && `Ready - ${activeDataset?.label ?? ''}`}
             {status === 'custom' && 'Custom parsing not configured'}
             {status === 'error' && 'Dataset error'}
             {status === 'idle' && 'Idle'}
@@ -47,11 +47,26 @@ export default function AppShell() {
         <NavLink className="nav-link" to="/" end>
           Dashboard
         </NavLink>
+        <NavLink className="nav-link" to="/memberlist">
+          Memberlist
+        </NavLink>
+        <NavLink className="nav-link" to="/guilds">
+          Guilds
+        </NavLink>
         <NavLink className="nav-link" to="/import">
           Import
         </NavLink>
         <NavLink className="nav-link" to="/ranking">
-          Ranking
+          Scouting
+        </NavLink>
+        <NavLink className="nav-link" to="/months">
+          Months
+        </NavLink>
+        <NavLink className="nav-link" to="/toplists">
+          Toplists
+        </NavLink>
+        <NavLink className="nav-link" to="/explorer">
+          Explorer
         </NavLink>
         <NavLink className="nav-link" to="/export">
           Export

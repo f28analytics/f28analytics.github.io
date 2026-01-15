@@ -1,12 +1,32 @@
-import type { ManifestSnapshot, WorkerResult } from '../data/types'
+import type {
+  ManifestSnapshot,
+  SaveIndexResult,
+  ScanSource,
+  WorkerResult,
+} from '../data/types'
 
-export type WorkerRequest = {
-  type: 'process-dataset'
-  datasetId: string
-  format: string
-  baseUrl: string
-  snapshots: ManifestSnapshot[]
-}
+export type WorkerRequest =
+  | {
+      type: 'process-manifest'
+      datasetId: string
+      format: string
+      baseUrl: string
+      snapshots: ManifestSnapshot[]
+      guildFilterKeys?: string[]
+    }
+  | {
+      type: 'process-repo-scans'
+      datasetId: string
+      baseUrl: string
+      scanSources: ScanSource[]
+      selectedScanIds: string[]
+      guildFilterKeys?: string[]
+    }
+  | {
+      type: 'compute-save-index'
+      index: number
+      guildFilterKeys?: string[]
+    }
 
 export type WorkerProgress = {
   type: 'progress'
@@ -19,9 +39,14 @@ export type WorkerResultMessage = {
   payload: WorkerResult
 }
 
+export type WorkerSaveIndexMessage = {
+  type: 'save-index-result'
+  payload: SaveIndexResult
+}
+
 export type WorkerError = {
   type: 'error'
   error: string
 }
 
-export type WorkerResponse = WorkerProgress | WorkerResultMessage | WorkerError
+export type WorkerResponse = WorkerProgress | WorkerResultMessage | WorkerSaveIndexMessage | WorkerError
