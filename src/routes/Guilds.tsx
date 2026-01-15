@@ -2,6 +2,16 @@ import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useData } from '../data/store'
 import { formatNumber } from '../ui/format'
 
+type RosterRow = {
+  key: string
+  name: string
+  members: number
+  baseStats: number
+  level: number
+  mine: number
+  treasury: number
+}
+
 export default function Guilds() {
   const { result } = useData()
   const [rosterOrder, setRosterOrder] = useState<string[]>([])
@@ -9,7 +19,7 @@ export default function Guilds() {
 
   const rosterRows = useMemo(() => {
     if (!result) return []
-    return result.guilds.map((guild) => {
+    return result.guilds.map<RosterRow>((guild) => {
       const latest = guild.points[guild.points.length - 1]
       return {
         key: guild.guildKey,
@@ -41,7 +51,9 @@ export default function Guilds() {
       return rosterRows
     }
     const rowMap = new Map(rosterRows.map((row) => [row.key, row]))
-    const ordered = rosterOrder.map((key) => rowMap.get(key)).filter(Boolean)
+    const ordered = rosterOrder
+      .map((key) => rowMap.get(key))
+      .filter((row): row is RosterRow => Boolean(row))
     const remaining = rosterRows.filter((row) => !rosterOrder.includes(row.key))
     return [...ordered, ...remaining]
   }, [rosterOrder, rosterRows])

@@ -333,7 +333,7 @@ const buildTopMoversByMetric = (players: PlayerComputed[]) => {
   METRICS.forEach((metric) => {
     WINDOW_KEYS.forEach((windowKey) => {
       const entries = players
-        .map((player) => {
+        .map((player): PlayerWindowEntry | null => {
           const metricWindow = player.windowMetrics[metric.key][windowKey]
           if (!metricWindow) {
             return null
@@ -341,13 +341,13 @@ const buildTopMoversByMetric = (players: PlayerComputed[]) => {
           return {
             playerKey: player.playerKey,
             name: player.name,
-            guildKey: player.latestGuildKey,
+            guildKey: player.latestGuildKey ?? undefined,
             metric: metric.key,
             perDay: metricWindow.perDay,
             delta: metricWindow.delta,
           }
         })
-        .filter((entry): entry is PlayerWindowEntry => Boolean(entry))
+        .filter((entry): entry is PlayerWindowEntry => entry !== null)
         .sort(
           (a, b) =>
             metricValueForSort(metric.key, b) - metricValueForSort(metric.key, a),

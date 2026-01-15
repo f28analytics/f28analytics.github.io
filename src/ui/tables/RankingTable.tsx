@@ -87,8 +87,9 @@ export default function RankingTable({
     if (!iconUrl || brokenClassIds.has(classId)) {
       return formatClass(classId)
     }
-    const alt = meta.label ? `${meta.label} class` : `Class ${classId}`
-    const title = meta.label ? `${meta.label} (Class ${classId})` : `Class ${classId}`
+    const label = meta?.label
+    const alt = label ? `${label} class` : `Class ${classId}`
+    const title = label ? `${label} (Class ${classId})` : `Class ${classId}`
     return (
       <span className="class-cell">
         <img

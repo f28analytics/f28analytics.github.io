@@ -226,7 +226,7 @@ export type GuildComputed = {
 export type PlayerWindowEntry = {
   playerKey: string
   name: string
-  guildKey?: string
+  guildKey: string | undefined
   metric: MetricKey
   perDay: number
   delta: number
