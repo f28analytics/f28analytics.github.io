@@ -51,6 +51,14 @@ input {
   flex-wrap: wrap;
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .page-title {
   font-size: 1.8rem;
   margin: 0;

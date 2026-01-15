@@ -137,6 +137,7 @@ export default function Memberlist() {
   const [searchHasFocus, setSearchHasFocus] = useState(false)
   const [activeSearchIndex, setActiveSearchIndex] = useState<number>(-1)
   const searchRef = useRef<HTMLDivElement | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     writeStoredColumns(memberlistColumns)
@@ -474,6 +475,68 @@ export default function Memberlist() {
     newGuildCardName.trim().length > 0 &&
     GUILD_CARD_COLUMNS.some((key) => !guildCardNames[key].trim())
 
+  const handleExport = () => {
+    const payload = {
+      version: 1,
+      memberlistColumns,
+      guildCardNames,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'memberlist-export.json'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw) as Partial<{
+        memberlistColumns: Record<string, unknown>
+        guildCardNames: Record<string, unknown>
+      }>
+      const columnsRaw = parsed?.memberlistColumns ?? {}
+      const nextColumns: Record<MemberlistColumn, string[]> = {
+        'col-1': Array.isArray((columnsRaw as any)['col-1'])
+          ? (columnsRaw as any)['col-1'].filter((value: unknown) => typeof value === 'string')
+          : [],
+        'col-2': Array.isArray((columnsRaw as any)['col-2'])
+          ? (columnsRaw as any)['col-2'].filter((value: unknown) => typeof value === 'string')
+          : [],
+        'col-3': Array.isArray((columnsRaw as any)['col-3'])
+          ? (columnsRaw as any)['col-3'].filter((value: unknown) => typeof value === 'string')
+          : [],
+      }
+      const poolSet = new Set(nextColumns['col-1'])
+      nextColumns['col-2'] = nextColumns['col-2'].filter((key) => !poolSet.has(key))
+      nextColumns['col-3'] = nextColumns['col-3'].filter((key) => !poolSet.has(key))
+
+      const namesRaw = parsed?.guildCardNames ?? {}
+      const nextNames: Record<GuildCardColumn, string> = {
+        'col-2': typeof (namesRaw as any)['col-2'] === 'string' ? (namesRaw as any)['col-2'] : '',
+        'col-3': typeof (namesRaw as any)['col-3'] === 'string' ? (namesRaw as any)['col-3'] : '',
+      }
+
+      setGuildCardNames(nextNames)
+      setMemberlistColumns(nextColumns)
+      updateMemberlistPoolKeys(nextColumns['col-1'])
+    } catch {
+      window.alert('Import failed. Please select a valid memberlist JSON file.')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   if (!result) {
     return (
       <div className="page">
@@ -491,6 +554,21 @@ export default function Memberlist() {
         <div>
           <h1 className="page-title">Memberlist</h1>
           <p className="page-subtitle">Playerpool management and roster summary.</p>
+        </div>
+        <div className="page-header-actions">
+          <button type="button" className="btn ghost" onClick={handleExport}>
+            Export
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json"
+            hidden
+            onChange={handleImportChange}
+          />
+          <button type="button" className="btn" onClick={handleImportClick}>
+            Import
+          </button>
         </div>
       </div>
 
