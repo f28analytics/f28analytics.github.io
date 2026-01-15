@@ -348,9 +348,6 @@ export default function Memberlist() {
         'col-2': current['col-2'].filter((key) => key !== playerKey),
         'col-3': current['col-3'].filter((key) => key !== playerKey),
       }
-      if (target !== 'col-1' && next[target].length >= MAX_MEMBERLIST_SLOTS) {
-        return current
-      }
       next[target] = [...next[target], playerKey]
       updateMemberlistPoolKeys(next['col-1'])
       return next
@@ -649,10 +646,7 @@ export default function Memberlist() {
       <section className="grid three-col">
         {MEMBERLIST_COLUMNS.map((columnKey) => {
           const columnValues = memberlistColumns[columnKey] ?? []
-          const slotCount =
-            columnKey === 'col-1'
-              ? Math.max(MAX_MEMBERLIST_SLOTS, columnValues.length)
-              : MAX_MEMBERLIST_SLOTS
+          const slotCount = Math.max(MAX_MEMBERLIST_SLOTS, columnValues.length)
           const slots = Array.from({ length: slotCount }, (_, idx) => columnValues[idx] ?? null)
           const columnLabel =
             columnKey === 'col-1' ? 'Playerpool' : guildCardLabels[columnKey]
@@ -669,9 +663,7 @@ export default function Memberlist() {
             >
               <div className="card-header">
                 <h2 className="card-title">{columnLabel}</h2>
-                <span className="badge subtle">
-                  {memberlistColumns[columnKey]?.length ?? 0} / {MAX_MEMBERLIST_SLOTS}
-                </span>
+                <span className="badge subtle">{memberlistColumns[columnKey]?.length ?? 0}</span>
               </div>
               <div className="memberlist-slots">
                 {slots.map((playerKey, slotIndex) => {
