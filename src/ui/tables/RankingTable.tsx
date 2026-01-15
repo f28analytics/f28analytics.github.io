@@ -171,11 +171,19 @@ export default function RankingTable({
                 className={`${onRowSelect ? 'row-clickable' : ''} ${isSelected ? 'row-selected' : ''}`.trim()}
                 onClick={() => {
                   onRowSelect?.(player.playerKey)
-                  onRowOpen?.(player.playerKey)
                 }}
               >
                 <td>
-                  <div className="table-main">{player.name}</div>
+                  <button
+                    type="button"
+                    className="table-main table-header-action"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onRowOpen?.(player.playerKey)
+                    }}
+                  >
+                    {player.name}
+                  </button>
                   <div className="table-sub">{player.server}</div>
                 </td>
                 <td>{renderClassCell(player.classId)}</td>
