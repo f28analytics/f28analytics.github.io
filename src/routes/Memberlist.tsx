@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type TouchEvent,
+} from 'react'
 import { useData } from '../data/store'
 import type { LatestPlayerEntry } from '../data/types'
 import { formatNumber } from '../ui/format'
 
 const MAX_MEMBERLIST_SLOTS = 50
+const LONG_PRESS_MS = 600
 const MEMBERLIST_COLUMNS = ['col-1', 'col-2', 'col-3'] as const
 type MemberlistColumn = (typeof MEMBERLIST_COLUMNS)[number]
 const GUILD_CARD_COLUMNS = ['col-2', 'col-3'] as const
@@ -138,6 +147,11 @@ export default function Memberlist() {
   const [activeSearchIndex, setActiveSearchIndex] = useState<number>(-1)
   const searchRef = useRef<HTMLDivElement | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const [touchMenuOpen, setTouchMenuOpen] = useState(false)
+  const [touchMenuPlayerKey, setTouchMenuPlayerKey] = useState<string | null>(null)
+  const [touchMenuColumn, setTouchMenuColumn] = useState<MemberlistColumn | null>(null)
+  const touchTimerRef = useRef<number | null>(null)
+  const touchMovedRef = useRef(false)
 
   useEffect(() => {
     writeStoredColumns(memberlistColumns)
@@ -475,6 +489,57 @@ export default function Memberlist() {
     newGuildCardName.trim().length > 0 &&
     GUILD_CARD_COLUMNS.some((key) => !guildCardNames[key].trim())
 
+  const isTouchDevice = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0
+  }, [])
+
+  const openTouchMenu = (playerKey: string, columnKey: MemberlistColumn) => {
+    setTouchMenuPlayerKey(playerKey)
+    setTouchMenuColumn(columnKey)
+    setTouchMenuOpen(true)
+  }
+
+  const closeTouchMenu = () => {
+    setTouchMenuOpen(false)
+    setTouchMenuPlayerKey(null)
+    setTouchMenuColumn(null)
+  }
+
+  const handleTouchStart =
+    (playerKey: string, columnKey: MemberlistColumn) => (event: TouchEvent<HTMLDivElement>) => {
+      if (!isTouchDevice) {
+        return
+      }
+      touchMovedRef.current = false
+      if (touchTimerRef.current) {
+        window.clearTimeout(touchTimerRef.current)
+      }
+      touchTimerRef.current = window.setTimeout(() => {
+        if (!touchMovedRef.current) {
+          event.preventDefault()
+          openTouchMenu(playerKey, columnKey)
+        }
+      }, LONG_PRESS_MS)
+    }
+
+  const handleTouchMove = () => {
+    touchMovedRef.current = true
+    if (touchTimerRef.current) {
+      window.clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }
+
+  const handleTouchEnd = () => {
+    if (touchTimerRef.current) {
+      window.clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }
+
   const handleExport = () => {
     const payload = {
       version: 1,
@@ -751,6 +816,11 @@ export default function Memberlist() {
                       key={`${columnKey}-${slotIndex}`}
                       className={`memberlist-slot ${player ? 'filled' : 'empty'}`}
                       draggable={Boolean(player)}
+                      onTouchStart={
+                        player ? handleTouchStart(player.playerKey, columnKey) : undefined
+                      }
+                      onTouchMove={player ? handleTouchMove : undefined}
+                      onTouchEnd={player ? handleTouchEnd : undefined}
                       onDragStart={(event) => {
                         if (!playerKey) return
                         event.dataTransfer.setData('text/plain', playerKey)
@@ -819,6 +889,55 @@ export default function Memberlist() {
             ))}
           </div>
         </section>
+      )}
+
+      {touchMenuOpen && touchMenuPlayerKey && touchMenuColumn && (
+        <div
+          className="context-menu-overlay"
+          onClick={closeTouchMenu}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              closeTouchMenu()
+            }
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="context-menu" onClick={(event) => event.stopPropagation()}>
+            <div className="context-menu-header">
+              Move{' '}
+              <span className="context-menu-title">
+                {memberPlayerMap.get(touchMenuPlayerKey)?.name ?? 'Player'}
+              </span>
+            </div>
+            {MEMBERLIST_COLUMNS.map((columnKey) => {
+              const label =
+                columnKey === 'col-1' ? 'Playerpool' : guildCardLabels[columnKey]
+              const isCurrent = columnKey === touchMenuColumn
+              return (
+                <button
+                  key={columnKey}
+                  className="context-menu-item"
+                  type="button"
+                  disabled={isCurrent}
+                  onClick={() => {
+                    movePlayerToColumn(touchMenuPlayerKey, columnKey)
+                    closeTouchMenu()
+                  }}
+                >
+                  <span
+                    className={`context-menu-circle ${isCurrent ? 'active' : ''}`}
+                    aria-hidden="true"
+                  />
+                  <span>{label}</span>
+                </button>
+              )
+            })}
+            <button className="btn ghost" type="button" onClick={closeTouchMenu}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
