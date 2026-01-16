@@ -288,26 +288,6 @@ const buildCardGuild = (
   }
 }
 
-const buildRecommendationMap = (players: PlayerComputed[]) => {
-  const recommendations = new Map<string, PlayerComputed['recommendation']>()
-  if (!players.length) {
-    return recommendations
-  }
-  const sortedByScore = [...players].sort((a, b) => b.score - a.score)
-  const mainSet = new Set(sortedByScore.slice(0, 50).map((player) => player.playerKey))
-  const wingSet = new Set(sortedByScore.slice(50, 100).map((player) => player.playerKey))
-  players.forEach((player) => {
-    if (mainSet.has(player.playerKey)) {
-      recommendations.set(player.playerKey, 'Main')
-    } else if (wingSet.has(player.playerKey)) {
-      recommendations.set(player.playerKey, 'Wing')
-    } else {
-      recommendations.set(player.playerKey, 'None')
-    }
-  })
-  return recommendations
-}
-
 const emptyTopMoversByMetric = () =>
   METRICS.reduce<Record<MetricKey, Record<WindowKey, PlayerWindowEntry[]>>>(
     (acc, metric) => {
@@ -414,10 +394,6 @@ export default function Dashboard() {
     }
     return cardPlayers.length
   }, [cardPlayers])
-  const cardRecommendations = useMemo(
-    () => buildRecommendationMap(cardPlayers),
-    [cardPlayers],
-  )
   const topMoversByMetric = useMemo(
     () => buildTopMoversByMetric(cardPlayers),
     [cardPlayers],
@@ -452,12 +428,20 @@ export default function Dashboard() {
   const hasIntervals = result.snapshots.length > 1
   const compareGuilds = cardGuilds.slice(0, 2)
   const topMoversMetric = topMoversByMetric?.[metricKey]?.[windowKey] ?? []
-  const mainCount = Array.from(cardRecommendations.values()).filter(
-    (value) => value === 'Main',
-  ).length
-  const wingCount = Array.from(cardRecommendations.values()).filter(
-    (value) => value === 'Wing',
-  ).length
+  const mainCount = useMemo(() => {
+    if (!allPlayers.length) {
+      return 0
+    }
+    const validKeys = new Set(allPlayers.map((player) => player.playerKey))
+    return cardColumns['col-2'].filter((key) => validKeys.has(key)).length
+  }, [allPlayers, cardColumns])
+  const wingCount = useMemo(() => {
+    if (!allPlayers.length) {
+      return 0
+    }
+    const validKeys = new Set(allPlayers.map((player) => player.playerKey))
+    return cardColumns['col-3'].filter((key) => validKeys.has(key)).length
+  }, [allPlayers, cardColumns])
 
   return (
     <div className="page">

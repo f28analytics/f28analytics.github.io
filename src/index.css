@@ -302,12 +302,14 @@ input {
 }
 
 .table-wrapper {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.85rem;
 }
 
@@ -323,6 +325,7 @@ input {
   color: var(--muted);
   font-weight: 600;
 }
+
 
 .table-main {
   font-weight: 600;

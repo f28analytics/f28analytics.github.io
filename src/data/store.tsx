@@ -51,6 +51,7 @@ type DataContextValue = {
 const SELECTED_DATASET_KEY = 'ga:selectedDatasetId'
 const SELECTED_SCANS_KEY = 'ga:selectedScanIds'
 const SELECTED_GUILDS_KEY = 'ga:selectedGuildKeys'
+const MEMBERLIST_COLUMNS_KEY = 'ga:memberlistColumns'
 const MEMBERLIST_POOL_KEY = 'ga:memberlistPoolKeys'
 const DEFAULT_WINDOW_KEY = 'ga:defaultWindowKey'
 
@@ -95,6 +96,28 @@ const readStoredValue = (key: string) => {
 const writeStoredValue = (key: string, value: string) => {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(key, value)
+}
+
+const readStoredMemberlistColumns = (): Record<string, string[]> => {
+  if (typeof window === 'undefined') {
+    return {}
+  }
+  try {
+    const raw = window.localStorage.getItem(MEMBERLIST_COLUMNS_KEY)
+    if (!raw) {
+      return {}
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const next: Record<string, string[]> = {}
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        next[key] = value.filter((entry): entry is string => typeof entry === 'string')
+      }
+    })
+    return next
+  } catch {
+    return {}
+  }
 }
 
 type PoolKeySource = {
@@ -323,6 +346,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const baseUrl = new URL('./', document.baseURI).toString()
     const guildFilterKeys = options?.guildKeys ?? selectedGuildKeys
 
+    const memberlistColumns = readStoredMemberlistColumns()
+
     if (activeDataset.format === 'repo-scan') {
       const scanIds = options?.scanIds ?? selectedScanIds
       if (!scanIds.length) {
@@ -344,6 +369,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         scanSources,
         selectedScanIds: scanIds,
         guildFilterKeys: guildFilterKeys.length ? guildFilterKeys : undefined,
+        memberlistColumns,
       }
       worker.postMessage(request)
       return
@@ -369,6 +395,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       baseUrl,
       snapshots,
       guildFilterKeys: guildFilterKeys.length ? guildFilterKeys : undefined,
+      memberlistColumns,
     }
     worker.postMessage(request)
   }

@@ -1,0 +1,11 @@
+.ranking-table-wrapper {
+  max-height: calc(100vh - 280px);
+  overflow: auto;
+}
+
+.ranking-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-strong);
+  z-index: 2;
+}

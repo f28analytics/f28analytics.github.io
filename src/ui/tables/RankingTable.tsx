@@ -105,8 +105,8 @@ export default function RankingTable({
   }
 
   return (
-    <div className="table-wrapper">
-      <table className="table">
+    <div className="table-wrapper ranking-table-wrapper">
+      <table className="table ranking-table">
         <thead>
           <tr>
             <th>Player</th>

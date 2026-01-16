@@ -258,7 +258,8 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     if (event.data.type === 'process-manifest') {
       repoCache = []
-      const { snapshots, format, baseUrl, datasetId, guildFilterKeys } = event.data
+      const { snapshots, format, baseUrl, datasetId, guildFilterKeys, memberlistColumns } =
+        event.data
       const adapter = getAdapter(format)
       if (!adapter) {
         throw new Error(`No adapter found for format ${format}`)
@@ -286,6 +287,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       postProgress('Computing metrics...')
       const result = computeDataset(normalized, snapshots, datasetId, {
         guildFilterKeys,
+        memberlistColumns,
       })
       result.guildRoster = roster
       result.defaultGuildKeys = defaultGuildKeys
@@ -295,7 +297,14 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     }
 
     if (event.data.type === 'process-repo-scans') {
-      const { baseUrl, datasetId, scanSources, selectedScanIds, guildFilterKeys } = event.data
+      const {
+        baseUrl,
+        datasetId,
+        scanSources,
+        selectedScanIds,
+        guildFilterKeys,
+        memberlistColumns,
+      } = event.data
       const selectedSources = scanSources.filter((source) => selectedScanIds.includes(source.id))
       if (!selectedSources.length) {
         throw new Error('No scan sources selected.')
@@ -327,6 +336,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       postProgress('Computing metrics...')
       const result = computeDataset(normalized, manifestSnapshots, datasetId, {
         guildFilterKeys,
+        memberlistColumns,
       })
       result.guildRoster = roster
       result.defaultGuildKeys = defaultGuildKeys

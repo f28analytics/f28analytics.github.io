@@ -93,6 +93,14 @@ export type PlayerScoreSnapshot = {
   score: number
 }
 
+export type GrowthDebug = {
+  absPerDay: number
+  absVsTop100: number
+  absVsGuild: number
+  relPerDay: number
+  momRatio: number
+}
+
 export type GuildSeriesPoint = {
   date: string
   memberCount: number
@@ -188,6 +196,7 @@ export type PlayerComputed = {
   }
   score: number
   scoreByWindow?: Record<WindowKey, number>
+  growthDebugByWindow?: Record<WindowKey, GrowthDebug>
   scoreTimeline?: PlayerScoreSnapshot[]
   rank: number
   recommendation: 'Main' | 'Wing' | 'None'

@@ -541,10 +541,20 @@ export default function Memberlist() {
   }
 
   const handleExport = () => {
+    const playerNames: Record<string, string> = {}
+    Object.values(memberlistColumns).forEach((keys) => {
+      keys.forEach((key) => {
+        const player = memberPlayerMap.get(key)
+        if (player?.name) {
+          playerNames[key] = player.name
+        }
+      })
+    })
     const payload = {
       version: 1,
       memberlistColumns,
       guildCardNames,
+      playerNames,
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)

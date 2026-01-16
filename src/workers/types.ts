@@ -13,6 +13,7 @@ export type WorkerRequest =
       baseUrl: string
       snapshots: ManifestSnapshot[]
       guildFilterKeys?: string[]
+      memberlistColumns?: Record<string, string[]>
     }
   | {
       type: 'process-repo-scans'
@@ -21,6 +22,7 @@ export type WorkerRequest =
       scanSources: ScanSource[]
       selectedScanIds: string[]
       guildFilterKeys?: string[]
+      memberlistColumns?: Record<string, string[]>
     }
   | {
       type: 'compute-save-index'

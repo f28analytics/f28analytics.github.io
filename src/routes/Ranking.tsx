@@ -5,6 +5,7 @@ import type { PlayerComputed, WindowKey } from '../data/types'
 import RankingTable from '../ui/tables/RankingTable'
 import RankingIntervalsFlyout from '../ui/RankingIntervalsFlyout'
 import RankingScoreFlyout from '../ui/RankingScoreFlyout'
+import './Ranking.css'
 
 type SortKey = 'score' | 'baseStats' | 'statsPlus' | 'level' | 'mine' | 'treasury'
 type FlyoutSource = 'baseStats' | 'statsPlus'

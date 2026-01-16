@@ -2,6 +2,7 @@ import type {
   GuildComputed,
   GuildSeries,
   GuildSeriesPoint,
+  GrowthDebug,
   IntervalMetric,
   ManifestSnapshot,
   MetricKey,
@@ -30,10 +31,13 @@ const SCORE_WEIGHTS = {
   mine: 0.05,
   treasury: 0.05,
 }
+const GROWTH_BASELINE = 1_000_000
+const GROWTH_MIN_GUILD_COUNT = 2
 
 type ScoreWindowMeta = {
   score: number
   growthScore: number
+  growthDebug?: GrowthDebug
   percentileTop500: number
   consistencyScore: number
   coverage: number
@@ -41,13 +45,37 @@ type ScoreWindowMeta = {
   treasuryCapped: boolean
 }
 
+type GrowthWindowInputs = {
+  windowDays: number
+  windowDelta: number
+  baseStart: number
+  baseEnd: number
+  absPerDay: number
+  relPerDay: number
+  realGuildKey?: string
+}
+
+type GrowthGroupStats = {
+  sumAbs: number
+  sumRel: number
+  count: number
+}
+
+type GrowthGroupAverages = {
+  abs: number
+  rel: number
+  count: number
+}
+
 type ScoreContext = {
   windowKey: WindowKey
+  playerKey: string
   server: string
   points: PlayerSeriesPoint[]
   intervals: IntervalMetric[]
   windowMetrics: PlayerWindowMetrics
   windowMeta: Record<WindowKey, { startDate: string; endDate: string; possibleIntervals: number }>
+  growthInputsByWindow?: Record<WindowKey, GrowthWindowInputs>
 }
 
 const toDate = (value: string) => new Date(value)
@@ -74,6 +102,14 @@ const median = (values: number[]) => {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value))
+
+const mapRatio = (ratio: number) => {
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return 0
+  }
+  const x = Math.log(ratio)
+  return clamp(1 / (1 + Math.exp(-x)), 0, 1)
+}
 
 const medianAbsoluteDeviation = (values: number[]) => {
   if (!values.length) {
@@ -308,6 +344,126 @@ const initializeWindowMetrics = (): PlayerWindowMetrics => ({
   treasury: { '1': null, '3': null, '6': null, '12': null },
 })
 
+const isWithinWindow = (
+  date: string,
+  windowMeta: { startDate: string; endDate: string },
+) => {
+  if (windowMeta.startDate && date < windowMeta.startDate) {
+    return false
+  }
+  if (windowMeta.endDate && date > windowMeta.endDate) {
+    return false
+  }
+  return true
+}
+
+const buildGrowthInputsForPoints = (
+  points: PlayerSeriesPoint[],
+  intervals: IntervalMetric[],
+  windowMetaByKey: Record<WindowKey, { startDate: string; endDate: string; possibleIntervals: number }>,
+): Record<WindowKey, GrowthWindowInputs> => {
+  const empty: GrowthWindowInputs = {
+    windowDays: 0,
+    windowDelta: 0,
+    baseStart: 0,
+    baseEnd: 0,
+    absPerDay: 0,
+    relPerDay: 0,
+    realGuildKey: undefined,
+  }
+  const result: Record<WindowKey, GrowthWindowInputs> = {
+    '1': { ...empty },
+    '3': { ...empty },
+    '6': { ...empty },
+    '12': { ...empty },
+  }
+
+  WINDOW_KEYS.forEach((windowKey) => {
+    const windowMeta = windowMetaByKey[windowKey]
+    const windowPoints = points.filter((point) => isWithinWindow(point.date, windowMeta))
+    const baseStart = windowPoints[0]?.baseStats ?? 0
+    const baseEndPoint = windowPoints[windowPoints.length - 1]
+    const baseEnd = baseEndPoint?.baseStats ?? 0
+    const realGuildKey = baseEndPoint?.guildKey
+
+    const windowIntervals = intervals.filter(
+      (interval) =>
+        isWithinWindow(interval.startDate, windowMeta) &&
+        isWithinWindow(interval.endDate, windowMeta),
+    )
+    const windowDays = windowIntervals.reduce((sum, interval) => sum + interval.days, 0)
+    const intervalDelta = windowIntervals.reduce((sum, interval) => sum + interval.delta, 0)
+    const windowDelta =
+      windowIntervals.length > 0 ? intervalDelta : baseEnd - baseStart
+
+    const clampedDelta = windowDelta > 0 ? windowDelta : 0
+    const absPerDay = windowDays > 0 ? clampedDelta / windowDays : 0
+    const relPerDay =
+      absPerDay > 0 ? absPerDay / Math.max(baseStart, GROWTH_BASELINE) : 0
+
+    result[windowKey] = {
+      windowDays,
+      windowDelta: clampedDelta,
+      baseStart,
+      baseEnd,
+      absPerDay,
+      relPerDay,
+      realGuildKey,
+    }
+  })
+
+  return result
+}
+
+const buildCustomGuildMap = (memberlistColumns?: Record<string, string[]>) => {
+  const map = new Map<string, string>()
+  if (!memberlistColumns) {
+    return map
+  }
+  Object.entries(memberlistColumns).forEach(([columnKey, playerKeys]) => {
+    if (columnKey === 'col-1' || !Array.isArray(playerKeys)) {
+      return
+    }
+    const customKey = `custom:${columnKey}`
+    playerKeys.forEach((playerKey) => {
+      map.set(playerKey, customKey)
+    })
+  })
+  return map
+}
+
+const addGrowthGroupStats = (
+  map: Map<string, GrowthGroupStats>,
+  key: string,
+  absPerDay: number,
+  relPerDay: number,
+) => {
+  if (!Number.isFinite(absPerDay) || !Number.isFinite(relPerDay)) {
+    return
+  }
+  const entry = map.get(key) ?? { sumAbs: 0, sumRel: 0, count: 0 }
+  entry.sumAbs += absPerDay
+  entry.sumRel += relPerDay
+  entry.count += 1
+  map.set(key, entry)
+}
+
+const finalizeGrowthGroupStats = (
+  map: Map<string, GrowthGroupStats>,
+): Map<string, GrowthGroupAverages> => {
+  const next = new Map<string, GrowthGroupAverages>()
+  map.forEach((stats, key) => {
+    if (stats.count > 0) {
+      next.set(key, {
+        abs: stats.sumAbs / stats.count,
+        rel: stats.sumRel / stats.count,
+        count: stats.count,
+      })
+    }
+  })
+  return next
+}
+
 const computePercentiles = (values: Map<string, number>) => {
   const entries = Array.from(values.entries()).sort((a, b) => a[1] - b[1])
   const percentileMap = new Map<string, number>()
@@ -335,7 +491,7 @@ export function computeDataset(
   normalizedSnapshots: NormalizedSnapshot[],
   manifestSnapshots: ManifestSnapshot[],
   datasetId: string,
-  options?: { guildFilterKeys?: string[] },
+  options?: { guildFilterKeys?: string[]; memberlistColumns?: Record<string, string[]> },
 ): WorkerResult {
   const snapshots = normalizedSnapshots
     .map((snapshot, index) => ({
@@ -830,6 +986,24 @@ export function computeDataset(
     player.percentiles = { baseStats, level, mine, treasury, resource }
   })
 
+  const customGuildByPlayer = buildCustomGuildMap(options?.memberlistColumns)
+
+  const growthInputsByPlayer = new Map<string, Record<WindowKey, GrowthWindowInputs>>()
+  players.forEach((player) => {
+    growthInputsByPlayer.set(
+      player.playerKey,
+      buildGrowthInputsForPoints(player.points, player.intervals.baseStats, windowMetaByKey),
+    )
+  })
+
+  const globalGrowthInputsByPlayer = new Map<string, Record<WindowKey, GrowthWindowInputs>>()
+  globalPlayers.forEach((player) => {
+    globalGrowthInputsByPlayer.set(
+      player.playerKey,
+      buildGrowthInputsForPoints(player.points, player.intervals.baseStats, windowMetaByKey),
+    )
+  })
+
   const serverTopKeysByServer = new Map<string, string[]>()
   if (latestIndex) {
     latestIndex.playersByKey.forEach((stats) => {
@@ -840,8 +1014,12 @@ export function computeDataset(
   }
 
   const globalPlayersByKey = new Map<string, PlayerComputed>()
+  const globalPlayersByServer = new Map<string, PlayerComputed[]>()
   globalPlayers.forEach((player) => {
     globalPlayersByKey.set(player.playerKey, player)
+    const list = globalPlayersByServer.get(player.server) ?? []
+    list.push(player)
+    globalPlayersByServer.set(player.server, list)
   })
 
   const serverTopAverageByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, number>>>(
@@ -851,6 +1029,125 @@ export function computeDataset(
     },
     { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
   )
+
+  const serverAverageByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, number>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  const customGuildAverageByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, GrowthGroupAverages>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  const realGuildAverageByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, GrowthGroupAverages>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  const serverStatsByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, { sum: number; count: number }>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  const customGuildStatsByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, GrowthGroupStats>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  const realGuildStatsByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, GrowthGroupStats>>>(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  globalPlayers.forEach((player) => {
+    const growthInputs = globalGrowthInputsByPlayer.get(player.playerKey)
+    if (!growthInputs) {
+      return
+    }
+    const customGuildKey = customGuildByPlayer.get(player.playerKey)
+    WINDOW_KEYS.forEach((windowKey) => {
+      const inputs = growthInputs[windowKey]
+      const absPerDay = inputs.absPerDay
+      const relPerDay = inputs.relPerDay
+      if (Number.isFinite(absPerDay)) {
+        const serverEntry = serverStatsByWindow[windowKey].get(player.server) ?? {
+          sum: 0,
+          count: 0,
+        }
+        serverEntry.sum += absPerDay
+        serverEntry.count += 1
+        serverStatsByWindow[windowKey].set(player.server, serverEntry)
+      }
+      if (inputs.realGuildKey) {
+        addGrowthGroupStats(
+          realGuildStatsByWindow[windowKey],
+          inputs.realGuildKey,
+          absPerDay,
+          relPerDay,
+        )
+      }
+      if (customGuildKey) {
+        addGrowthGroupStats(
+          customGuildStatsByWindow[windowKey],
+          customGuildKey,
+          absPerDay,
+          relPerDay,
+        )
+      }
+    })
+  })
+
+  WINDOW_KEYS.forEach((windowKey) => {
+    serverStatsByWindow[windowKey].forEach((stats, server) => {
+      const avg = stats.count > 0 ? stats.sum / stats.count : 0
+      serverAverageByWindow[windowKey].set(server, avg)
+    })
+    customGuildAverageByWindow[windowKey] = finalizeGrowthGroupStats(
+      customGuildStatsByWindow[windowKey],
+    )
+    realGuildAverageByWindow[windowKey] = finalizeGrowthGroupStats(
+      realGuildStatsByWindow[windowKey],
+    )
+  })
+
+  globalPlayersByServer.forEach((list, server) => {
+    WINDOW_KEYS.forEach((windowKey) => {
+      const entries = list
+        .map((player) => {
+          const inputs = globalGrowthInputsByPlayer.get(player.playerKey)?.[windowKey]
+          return {
+            baseEnd: inputs?.baseEnd ?? 0,
+            absPerDay: inputs?.absPerDay ?? 0,
+          }
+        })
+        .sort((a, b) => b.baseEnd - a.baseEnd)
+      const topAbs = entries
+        .slice(0, 100)
+        .map((entry) => entry.absPerDay)
+        .filter((value) => Number.isFinite(value))
+      const avg = topAbs.length ? average(topAbs) : 0
+      serverTopAverageByWindow[windowKey].set(server, avg)
+    })
+  })
 
   const serverTopPercentilesByWindow = WINDOW_KEYS.reduce<Record<WindowKey, Map<string, number[]>>>(
     (acc, key) => {
@@ -871,21 +1168,9 @@ export function computeDataset(
       })
       .sort((a, b) => b.baseStats - a.baseStats)
 
-    const top150Keys = sortedByBase.slice(0, 150).map((entry) => entry.playerKey)
     const top500Keys = sortedByBase.slice(0, 500).map((entry) => entry.playerKey)
 
     WINDOW_KEYS.forEach((windowKey) => {
-      const averageValues: number[] = []
-      top150Keys.forEach((playerKey) => {
-        const player = globalPlayersByKey.get(playerKey)
-        const perDay = player?.windowMetrics.baseStats[windowKey]?.perDay
-        if (Number.isFinite(perDay ?? Number.NaN)) {
-          averageValues.push(perDay as number)
-        }
-      })
-      const avg = averageValues.length ? average(averageValues) : 0
-      serverTopAverageByWindow[windowKey].set(server, avg)
-
       const percentileValues: number[] = []
       top500Keys.forEach((playerKey) => {
         const player = globalPlayersByKey.get(playerKey)
@@ -932,11 +1217,73 @@ export function computeDataset(
     rosterTreasuryValuesByWindow[windowKey].sort((a, b) => a - b)
   })
 
+const resolveRatio = (value: number, primary: number, fallback: number) => {
+  if (primary > 0) {
+    return value / primary
+  }
+  if (fallback > 0) {
+    return value / fallback
+  }
+  return 1
+}
+
 const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
     const windowMetric = context.windowMetrics.baseStats[context.windowKey]
     const basePerDay = windowMetric?.perDay ?? 0
-    const avgTop150 = serverTopAverageByWindow[context.windowKey].get(context.server) ?? 0
-    const growthScore = avgTop150 > 0 ? clamp(basePerDay / avgTop150, 0, 1) : 0
+
+    const growthInputs = context.growthInputsByWindow?.[context.windowKey]
+    const absPerDayRaw = growthInputs?.absPerDay ?? 0
+    const relPerDayRaw = growthInputs?.relPerDay ?? 0
+    const absPerDay = Number.isFinite(absPerDayRaw) ? absPerDayRaw : 0
+    const relPerDay = Number.isFinite(relPerDayRaw) ? relPerDayRaw : 0
+    const realGuildKey = growthInputs?.realGuildKey
+    const customGuildKey = customGuildByPlayer.get(context.playerKey)
+
+    const avgTop100 = serverTopAverageByWindow[context.windowKey].get(context.server) ?? 0
+    const serverAvg = serverAverageByWindow[context.windowKey].get(context.server) ?? 0
+
+    const absVsTop100 = resolveRatio(absPerDay, avgTop100, serverAvg)
+
+    const customGuildStats = customGuildKey
+      ? customGuildAverageByWindow[context.windowKey].get(customGuildKey)
+      : undefined
+    const realGuildStats = realGuildKey
+      ? realGuildAverageByWindow[context.windowKey].get(realGuildKey)
+      : undefined
+    const isGuildValid = (stats?: GrowthGroupAverages) =>
+      Boolean(stats && stats.count >= GROWTH_MIN_GUILD_COUNT && stats.abs > 0)
+
+    let guildAbsAvg = 0
+    let guildRelAvg = 0
+    if (isGuildValid(customGuildStats)) {
+      guildAbsAvg = customGuildStats?.abs ?? 0
+      guildRelAvg = customGuildStats?.rel ?? 0
+    } else if (isGuildValid(realGuildStats)) {
+      guildAbsAvg = realGuildStats?.abs ?? 0
+      guildRelAvg = realGuildStats?.rel ?? 0
+    } else {
+      guildAbsAvg = serverAvg
+    }
+
+    const absVsGuild = resolveRatio(absPerDay, guildAbsAvg, serverAvg)
+    const relVsGuild = guildRelAvg > 0 ? relPerDay / guildRelAvg : 1
+
+    const absNServer = mapRatio(absVsTop100)
+    const absNGuild = mapRatio(absVsGuild)
+    const relN = guildRelAvg > 0 ? mapRatio(relVsGuild) : 0.5
+    const momRatio = 1
+    const momN = 0.5
+    const absN = 0.7 * absNServer + 0.3 * absNGuild
+    const growthScore = clamp(0.7 * absN + 0.2 * relN + 0.1 * momN, 0, 1)
+
+    const growthDebug: GrowthDebug = {
+      absPerDay,
+      absVsTop100,
+      absVsGuild,
+      relPerDay,
+      momRatio,
+    }
+
     const percentileValues =
       serverTopPercentilesByWindow[context.windowKey].get(context.server) ?? []
     const percentileTop500 = percentileFromSorted(percentileValues, basePerDay)
@@ -997,6 +1344,7 @@ const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
   return {
     score: scoreRaw * coverageFactor,
     growthScore,
+    growthDebug,
     percentileTop500,
     consistencyScore,
     coverage,
@@ -1036,13 +1384,16 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
     const windowMeta = buildWindowMeta(slice.map((point) => point.date))
     const intervals = buildIntervals(slice, (point) => point.baseStats)
     const windowMetrics = buildWindowMetricsForPoints(slice)
+    const growthInputsByWindow = buildGrowthInputsForPoints(slice, intervals, windowMeta)
     const context: ScoreContext = {
       windowKey: DEFAULT_SCORE_WINDOW,
+      playerKey: player.playerKey,
       server: player.server,
       points: slice,
       intervals,
       windowMetrics,
       windowMeta,
+      growthInputsByWindow,
     }
     const scoreMeta = computeScoreForWindow(context)
     timeline.push({
@@ -1053,7 +1404,10 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
   return timeline
 }
 
-  const applyScores = (list: PlayerComputed[]) => {
+  const applyScores = (
+    list: PlayerComputed[],
+    growthInputsMap: Map<string, Record<WindowKey, GrowthWindowInputs>>,
+  ) => {
     list.forEach((player) => {
       const scoreByWindow: Record<WindowKey, number> = {
         '1': 0,
@@ -1061,13 +1415,22 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
         '6': 0,
         '12': 0,
       }
+      const growthInputsByWindow = growthInputsMap.get(player.playerKey)
+      const growthDebugByWindow: Record<WindowKey, GrowthDebug> = {
+        '1': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
+        '3': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
+        '6': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
+        '12': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
+      }
       const buildContext = (windowKey: WindowKey): ScoreContext => ({
         windowKey,
+        playerKey: player.playerKey,
         server: player.server,
         points: player.points,
         intervals: player.intervals.baseStats,
         windowMetrics: player.windowMetrics,
         windowMeta: windowMetaByKey,
+        growthInputsByWindow,
       })
 
       const defaultMeta = computeScoreForWindow(buildContext(DEFAULT_SCORE_WINDOW))
@@ -1077,8 +1440,12 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
             ? defaultMeta
             : computeScoreForWindow(buildContext(windowKey))
         scoreByWindow[windowKey] = meta.score
+        if (meta.growthDebug) {
+          growthDebugByWindow[windowKey] = meta.growthDebug
+        }
       })
       player.scoreByWindow = scoreByWindow
+      player.growthDebugByWindow = growthDebugByWindow
       player.score = scoreByWindow[DEFAULT_SCORE_WINDOW] ?? 0
 
       const strengths: string[] = []
@@ -1099,8 +1466,8 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
     })
   }
 
-  applyScores(players)
-  applyScores(globalPlayers)
+  applyScores(players, growthInputsByPlayer)
+  applyScores(globalPlayers, globalGrowthInputsByPlayer)
 
   const scoreValue = (player: PlayerComputed) =>
     player.scoreByWindow?.[DEFAULT_SCORE_WINDOW] ?? player.score
