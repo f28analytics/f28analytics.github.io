@@ -171,6 +171,68 @@ const weightedPerDay = (intervals: IntervalMetric[]) => {
   return totalDays > 0 ? totalDelta / totalDays : 0
 }
 
+const summarizeWindowIntervals = (intervals: IntervalMetric[], windowKey: WindowKey) => {
+  if (!intervals.length) {
+    return { days: 0, delta: 0, perDay: 0 }
+  }
+  const count = Math.max(1, Math.trunc(Number(windowKey)))
+  const slice = intervals.slice(-count)
+  const days = slice.reduce((sum, interval) => sum + interval.days, 0)
+  const delta = slice.reduce((sum, interval) => sum + interval.delta, 0)
+  const perDay = days > 0 ? delta / days : 0
+  return { days, delta, perDay }
+}
+
+type WindowSummary = {
+  days: number
+  delta: number
+  perDay: number
+  hasData: boolean
+}
+
+const summarizeWindowSlice = (
+  intervals: IntervalMetric[],
+  windowKey: WindowKey,
+  offset: number,
+): WindowSummary => {
+  const count = Math.max(1, Math.trunc(Number(windowKey)))
+  const end = intervals.length - count * offset
+  const start = end - count
+  if (start < 0 || end <= 0) {
+    return { days: 0, delta: 0, perDay: 0, hasData: false }
+  }
+  const slice = intervals.slice(start, end)
+  if (!slice.length) {
+    return { days: 0, delta: 0, perDay: 0, hasData: false }
+  }
+  const days = slice.reduce((sum, interval) => sum + interval.days, 0)
+  const delta = slice.reduce((sum, interval) => sum + interval.delta, 0)
+  const perDay = days > 0 ? delta / days : 0
+  return { days, delta, perDay, hasData: days > 0 }
+}
+
+const buildWindowComparison = (
+  intervals: IntervalMetric[],
+  windowKey: WindowKey,
+  diffMode: 'perDay' | 'delta',
+) => {
+  const current = summarizeWindowSlice(intervals, windowKey, 0)
+  const prev = summarizeWindowSlice(intervals, windowKey, 1)
+  if (!current.hasData || !prev.hasData) {
+    return null
+  }
+  const diff = diffMode === 'delta' ? current.delta - prev.delta : current.perDay - prev.perDay
+  return { current, prev, diff }
+}
+
+const formatSigned = (value: number, digits = 2) => {
+  if (!Number.isFinite(value)) {
+    return '-'
+  }
+  const formatted = value.toFixed(digits)
+  return value > 0 ? `+${formatted}` : formatted
+}
+
 const buildGuildIntervals = (points: GuildSeriesPoint[]): IntervalMetric[] => {
   const intervals: IntervalMetric[] = []
   for (let index = 1; index < points.length; index += 1) {
@@ -353,6 +415,10 @@ export default function Dashboard() {
   const [metricKey, setMetricKey] = useState<MetricKey>('baseStats')
 
   useEffect(() => setWindowKey(defaultWindowKey), [defaultWindowKey])
+  const applyWindowKey = (key: WindowKey) => {
+    setWindowKey(key)
+    updateDefaultWindowKey(key)
+  }
 
   const allPlayers = useMemo(
     () => result?.globalPlayers ?? result?.players ?? [],
@@ -397,6 +463,58 @@ export default function Dashboard() {
   const topMoversByMetric = useMemo(
     () => buildTopMoversByMetric(cardPlayers),
     [cardPlayers],
+  )
+  const baseDiffs = useMemo(
+    () =>
+      cardPlayers
+        .map((player) => {
+          const comparison = buildWindowComparison(player.intervals.baseStats, windowKey, 'perDay')
+          if (!comparison) {
+            return null
+          }
+          return { player, ...comparison }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    [cardPlayers, windowKey],
+  )
+  const mineDiffs = useMemo(
+    () =>
+      cardPlayers
+        .map((player) => {
+          const comparison = buildWindowComparison(player.intervals.mine, windowKey, 'perDay')
+          if (!comparison) {
+            return null
+          }
+          return { player, ...comparison }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    [cardPlayers, windowKey],
+  )
+  const treasuryDiffs = useMemo(
+    () =>
+      cardPlayers
+        .map((player) => {
+          const comparison = buildWindowComparison(player.intervals.treasury, windowKey, 'perDay')
+          if (!comparison) {
+            return null
+          }
+          return { player, ...comparison }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    [cardPlayers, windowKey],
+  )
+  const levelDiffs = useMemo(
+    () =>
+      cardPlayers
+        .map((player) => {
+          const comparison = buildWindowComparison(player.intervals.level, windowKey, 'delta')
+          if (!comparison) {
+            return null
+          }
+          return { player, ...comparison }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    [cardPlayers, windowKey],
   )
 
   const rangeSummary = useMemo(() => {
@@ -476,33 +594,57 @@ export default function Dashboard() {
         {cardGuilds.map((guild) => {
           const baseIntervals = guild.intervalsByMetric?.baseStats ?? []
           const levelIntervals = guild.intervalsByMetric?.level ?? []
-          const lastBaseInterval = baseIntervals[baseIntervals.length - 1]
-          const lastLevelInterval = levelIntervals[levelIntervals.length - 1]
+          const mineIntervals = guild.intervalsByMetric?.mine ?? []
+          const treasuryIntervals = guild.intervalsByMetric?.treasury ?? []
+          const baseWindow = summarizeWindowIntervals(baseIntervals, windowKey)
+          const levelWindow = summarizeWindowIntervals(levelIntervals, windowKey)
+          const mineWindow = summarizeWindowIntervals(mineIntervals, windowKey)
+          const treasuryWindow = summarizeWindowIntervals(treasuryIntervals, windowKey)
+          const windowLabel = `${windowKey} mo`
           return (
             <div key={guild.guildKey} className="card">
-              <h2 className="card-title">{guild.guildName}</h2>
+              <div className="card-header">
+                <h2 className="card-title">{guild.guildName}</h2>
+                <div className="tabs">
+                  {WINDOW_KEYS.map((key) => (
+                    <button
+                      key={key}
+                      className={`tab ${windowKey === key ? 'active' : ''}`}
+                      onClick={() => applyWindowKey(key)}
+                    >
+                      {key} mo
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="stat-grid">
                 <div>
                   <div className="stat-label">BaseStats/Day Median</div>
-                  <div className="stat-value">{formatNumber(guild.baseStatsPerDayYear, 1)}</div>
+                  <div className="stat-value">{formatNumber(baseWindow.perDay, 1)}</div>
                   <div className="muted">
-                    Last interval {formatNumber(lastBaseInterval?.perDay ?? 0, 1)}
+                    Window {windowLabel} · {formatNumber(baseWindow.delta, 0)} total
                   </div>
                 </div>
                 <div>
-                  <div className="stat-label">Level Median</div>
-                  <div className="stat-value">{formatNumber(guild.levelMedianLatest, 0)}</div>
+                  <div className="stat-label">Level Delta</div>
+                  <div className="stat-value">{formatNumber(levelWindow.delta, 0)}</div>
                   <div className="muted">
-                    Delta {formatNumber(lastLevelInterval?.delta ?? 0, 0)}
+                    Window {windowLabel} · {levelWindow.days}d
                   </div>
                 </div>
                 <div>
                   <div className="stat-label">Mine Pace</div>
-                  <div className="stat-value">{formatNumber(guild.minePerDayYear, 2)}</div>
+                  <div className="stat-value">{formatNumber(mineWindow.perDay, 2)}</div>
+                  <div className="muted">
+                    Window {windowLabel} · {formatNumber(mineWindow.delta, 0)} total
+                  </div>
                 </div>
                 <div>
                   <div className="stat-label">Treasury Pace</div>
-                  <div className="stat-value">{formatNumber(guild.treasuryPerDayYear, 2)}</div>
+                  <div className="stat-value">{formatNumber(treasuryWindow.perDay, 2)}</div>
+                  <div className="muted">
+                    Window {windowLabel} · {formatNumber(treasuryWindow.delta, 0)} total
+                  </div>
                 </div>
               </div>
             </div>
@@ -597,10 +739,7 @@ export default function Dashboard() {
               <button
                 key={key}
                 className={`tab ${windowKey === key ? 'active' : ''}`}
-                onClick={() => {
-                  setWindowKey(key)
-                  updateDefaultWindowKey(key)
-                }}
+                onClick={() => applyWindowKey(key)}
               >
                 {key} mo
               </button>
@@ -638,24 +777,35 @@ export default function Dashboard() {
       </section>
 
       <section className="card">
-        <h2 className="card-title">Insights</h2>
+        <div className="card-header">
+          <h2 className="card-title">Insights</h2>
+          <div className="tabs">
+            {WINDOW_KEYS.map((key) => (
+              <button
+                key={key}
+                className={`tab ${windowKey === key ? 'active' : ''}`}
+                onClick={() => applyWindowKey(key)}
+              >
+                {key} mo
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid two-col">
           <div>
             <div className="interval-title">Biggest Risers (BaseStats/Day)</div>
             <div className="list">
-              {cardPlayers
-                .filter((player) => player.windowMetrics.baseStats[windowKey])
-                .sort(
-                  (a, b) =>
-                    (b.windowMetrics.baseStats[windowKey]?.perDay ?? 0) -
-                    (a.windowMetrics.baseStats[windowKey]?.perDay ?? 0),
-                )
+              {baseDiffs
+                .slice()
+                .sort((a, b) => b.diff - a.diff)
                 .slice(0, 5)
-                .map((player) => (
+                .map(({ player, current, diff }) => (
                   <div key={`riser-${player.playerKey}`} className="list-item">
                     <div className="list-title">{player.name}</div>
                     <div className="metric-inline">
-                      {formatNumber(player.windowMetrics.baseStats[windowKey]?.perDay ?? 0, 2)} / day
+                      <span>Δ vs prev: {formatSigned(diff, 2)} / day</span>
+                      <span>Now: {formatNumber(current.perDay, 2)} / day</span>
+                      <span className="muted">Total: {formatNumber(current.delta, 0)}</span>
                     </div>
                   </div>
                 ))}
@@ -664,19 +814,17 @@ export default function Dashboard() {
           <div>
             <div className="interval-title">Biggest Droppers (BaseStats/Day)</div>
             <div className="list">
-              {cardPlayers
-                .filter((player) => player.windowMetrics.baseStats[windowKey])
-                .sort(
-                  (a, b) =>
-                    (a.windowMetrics.baseStats[windowKey]?.perDay ?? 0) -
-                    (b.windowMetrics.baseStats[windowKey]?.perDay ?? 0),
-                )
+              {baseDiffs
+                .slice()
+                .sort((a, b) => a.diff - b.diff)
                 .slice(0, 5)
-                .map((player) => (
+                .map(({ player, current, diff }) => (
                   <div key={`dropper-${player.playerKey}`} className="list-item">
                     <div className="list-title">{player.name}</div>
                     <div className="metric-inline">
-                      {formatNumber(player.windowMetrics.baseStats[windowKey]?.perDay ?? 0, 2)} / day
+                      <span>Δ vs prev: {formatSigned(diff, 2)} / day</span>
+                      <span>Now: {formatNumber(current.perDay, 2)} / day</span>
+                      <span className="muted">Total: {formatNumber(current.delta, 0)}</span>
                     </div>
                   </div>
                 ))}
@@ -685,14 +833,17 @@ export default function Dashboard() {
           <div>
             <div className="interval-title">Resource Specialists (Mine)</div>
             <div className="list">
-              {cardPlayers
-                .sort((a, b) => b.minePerDayYear - a.minePerDayYear)
+              {mineDiffs
+                .slice()
+                .sort((a, b) => b.diff - a.diff)
                 .slice(0, 5)
-                .map((player) => (
+                .map(({ player, current, diff }) => (
                   <div key={`mine-${player.playerKey}`} className="list-item">
                     <div className="list-title">{player.name}</div>
                     <div className="metric-inline">
-                      {formatNumber(player.minePerDayYear, 2)} / day
+                      <span>Δ vs prev: {formatSigned(diff, 2)} / day</span>
+                      <span>Now: {formatNumber(current.perDay, 2)} / day</span>
+                      <span className="muted">Total: {formatNumber(current.delta, 0)}</span>
                     </div>
                   </div>
                 ))}
@@ -701,14 +852,17 @@ export default function Dashboard() {
           <div>
             <div className="interval-title">Resource Specialists (Treasury)</div>
             <div className="list">
-              {cardPlayers
-                .sort((a, b) => b.treasuryPerDayYear - a.treasuryPerDayYear)
+              {treasuryDiffs
+                .slice()
+                .sort((a, b) => b.diff - a.diff)
                 .slice(0, 5)
-                .map((player) => (
+                .map(({ player, current, diff }) => (
                   <div key={`treasury-${player.playerKey}`} className="list-item">
                     <div className="list-title">{player.name}</div>
                     <div className="metric-inline">
-                      {formatNumber(player.treasuryPerDayYear, 2)} / day
+                      <span>Δ vs prev: {formatSigned(diff, 2)} / day</span>
+                      <span>Now: {formatNumber(current.perDay, 2)} / day</span>
+                      <span className="muted">Total: {formatNumber(current.delta, 0)}</span>
                     </div>
                   </div>
                 ))}
@@ -717,18 +871,17 @@ export default function Dashboard() {
           <div>
             <div className="interval-title">Level Pushers</div>
             <div className="list">
-              {cardPlayers
-                .sort(
-                  (a, b) =>
-                    (b.windowMetrics.level[windowKey]?.delta ?? 0) -
-                    (a.windowMetrics.level[windowKey]?.delta ?? 0),
-                )
+              {levelDiffs
+                .slice()
+                .sort((a, b) => b.diff - a.diff)
                 .slice(0, 5)
-                .map((player) => (
+                .map(({ player, current, diff }) => (
                   <div key={`level-${player.playerKey}`} className="list-item">
                     <div className="list-title">{player.name}</div>
                     <div className="metric-inline">
-                      {formatNumber(player.windowMetrics.level[windowKey]?.delta ?? 0, 0)} delta
+                      <span>Δ vs prev: {formatSigned(diff, 0)} lvls</span>
+                      <span>Now: {formatNumber(current.delta, 0)} lvls</span>
+                      <span className="muted">Per day: {formatNumber(current.perDay, 2)}</span>
                     </div>
                   </div>
                 ))}

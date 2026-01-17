@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import type { PlayerComputed, SnapshotSummary, WindowKey } from '../data/types'
 import { formatDate } from './format'
 
-type FlyoutSource = 'baseStats' | 'statsPlus'
+type FlyoutSource = 'baseStats' | 'statsPlus' | 'level'
 
 type IntervalRow = {
   startDate: string
@@ -10,6 +10,8 @@ type IntervalRow = {
   days: number
   delta?: number | null
   perDay?: number | null
+  endValue?: number | null
+  endSource?: string | null
   missing?: boolean
 }
 
@@ -46,9 +48,17 @@ const formatValue = (value?: number | null, digits = 2) => {
   return value.toFixed(digits)
 }
 
+const formatPlainInt = (value?: number | null) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '--'
+  }
+  return Math.round(value).toLocaleString('en-US')
+}
+
 const buildIntervalRows = (
   player: PlayerComputed | null,
   snapshots: SnapshotSummary[],
+  valueKey: 'baseStats' | 'level',
 ): IntervalRow[] => {
   if (!player || snapshots.length < 2) {
     return []
@@ -79,13 +89,17 @@ const buildIntervalRows = (
       })
       continue
     }
-    const delta = endPoint.baseStats - startPoint.baseStats
+    const startValue = valueKey === 'level' ? startPoint.level : startPoint.baseStats
+    const endValue = valueKey === 'level' ? endPoint.level : endPoint.baseStats
+    const delta = endValue - startValue
     rows.push({
       startDate,
       endDate,
       days,
       delta,
       perDay: delta / days,
+      endValue: valueKey === 'level' ? endValue : null,
+      endSource: valueKey === 'level' ? endPoint.levelSource ?? null : null,
     })
   }
   return rows
@@ -110,9 +124,19 @@ export default function RankingIntervalsFlyout({
     return () => window.removeEventListener('keydown', handleKey)
   }, [open, onClose])
 
-  const rows = useMemo(() => buildIntervalRows(player, snapshots), [player, snapshots])
-  const windowMetric = player?.windowMetrics.baseStats[windowKey] ?? null
-  const sourceLabel = source === 'statsPlus' ? 'Stats +' : 'BaseStats/Day'
+  const valueKey = source === 'level' ? 'level' : 'baseStats'
+  const rows = useMemo(
+    () => buildIntervalRows(player, snapshots, valueKey),
+    [player, snapshots, valueKey],
+  )
+  const windowMetric =
+    source === 'level'
+      ? player?.windowMetrics.level[windowKey] ?? null
+      : player?.windowMetrics.baseStats[windowKey] ?? null
+  const sourceLabel =
+    source === 'statsPlus' ? 'Stats +' : source === 'level' ? 'Level' : 'BaseStats/Day'
+  const showLevel = source === 'level'
+  const tableCols = showLevel ? 6 : 4
 
   if (!open) {
     return null
@@ -155,6 +179,8 @@ export default function RankingIntervalsFlyout({
                   <th>Days</th>
                   <th>Delta</th>
                   <th>/ Day</th>
+                  {showLevel ? <th>Level</th> : null}
+                  {showLevel ? <th>Source</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -166,11 +192,13 @@ export default function RankingIntervalsFlyout({
                     <td>{row.missing ? '--' : row.days}</td>
                     <td>{formatDelta(row.delta)}</td>
                     <td>{formatValue(row.perDay, 2)}</td>
+                    {showLevel ? <td>{formatPlainInt(row.endValue)}</td> : null}
+                    {showLevel ? <td>{row.endSource ?? '--'}</td> : null}
                   </tr>
                 ))}
                 {!rows.length ? (
                   <tr>
-                    <td colSpan={4} className="empty">
+                    <td colSpan={tableCols} className="empty">
                       Not enough snapshots to build intervals.
                     </td>
                   </tr>

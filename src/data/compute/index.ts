@@ -3,6 +3,8 @@ import type {
   GuildSeries,
   GuildSeriesPoint,
   GrowthDebug,
+  LevelSource,
+  ScoreDebug,
   IntervalMetric,
   ManifestSnapshot,
   MetricKey,
@@ -27,19 +29,26 @@ const MINE_CAP = 100
 const TREASURY_CAP = 45
 const SCORE_WEIGHTS = {
   growth: 0.75,
-  consistency: 0.15,
-  mine: 0.05,
-  treasury: 0.05,
+  consistency: 0.25,
 }
 const GROWTH_BASELINE = 1_000_000
 const GROWTH_MIN_GUILD_COUNT = 2
+const SERVER_AVG_TOP_LIMIT = 150
+const CONSISTENCY_EPS = 1e-6
+const CONSISTENCY_RATIO_MIN = 0.5
+const CONSISTENCY_RATIO_MAX = 1.5
+const CONSISTENCY_GAP_K = 3
+const CONSISTENCY_MAD_K = 6
 
 type ScoreWindowMeta = {
   score: number
   growthScore: number
   growthDebug?: GrowthDebug
+  scoreDebug?: ScoreDebug
   percentileTop500: number
   consistencyScore: number
+  levelPer30: number | null
+  lowLeveling: boolean
   coverage: number
   mineCapped: boolean
   treasuryCapped: boolean
@@ -67,12 +76,18 @@ type GrowthGroupAverages = {
   count: number
 }
 
+type IntervalStats = {
+  sum: number
+  count: number
+}
+
 type ScoreContext = {
   windowKey: WindowKey
   playerKey: string
   server: string
   points: PlayerSeriesPoint[]
   intervals: IntervalMetric[]
+  levelIntervals: IntervalMetric[]
   windowMetrics: PlayerWindowMetrics
   windowMeta: Record<WindowKey, { startDate: string; endDate: string; possibleIntervals: number }>
   growthInputsByWindow?: Record<WindowKey, GrowthWindowInputs>
@@ -264,58 +279,107 @@ const buildGuildMetricIntervals = (
   return intervals
 }
 
-const findWindowStart = (points: PlayerSeriesPoint[], months: number) => {
-  if (!points.length) {
-    return null
+const getMonthKey = (value: string) => {
+  const trimmed = value.trim()
+  if (/^\d{4}-\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 7)
   }
-  const endDate = toDate(points[points.length - 1].date)
-  const target = new Date(endDate)
-  target.setMonth(target.getMonth() - months)
-  for (let index = points.length - 2; index >= 0; index -= 1) {
-    const candidate = points[index]
-    if (toDate(candidate.date) <= target) {
-      return candidate
+  const parsed = toDate(trimmed)
+  if (Number.isNaN(parsed.getTime())) {
+    return ''
+  }
+  const year = parsed.getUTCFullYear()
+  const month = parsed.getUTCMonth() + 1
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
+const buildMonthBuckets = <T>(items: T[], getDate: (item: T) => string) => {
+  const months: string[] = []
+  const monthMap = new Map<string, T[]>()
+  items.forEach((item) => {
+    const key = getMonthKey(getDate(item))
+    if (!key) {
+      return
     }
+    const existing = monthMap.get(key)
+    if (existing) {
+      existing.push(item)
+      return
+    }
+    monthMap.set(key, [item])
+    months.push(key)
+  })
+  return { months, monthMap }
+}
+
+const resolveWindowRange = (monthKeys: string[], windowMonths: number) => {
+  if (!monthKeys.length) {
+    return { startIndex: -1, endIndex: -1 }
   }
-  return points[0]
+  const endIndex = monthKeys.length > 1 ? monthKeys.length - 2 : 0
+  const windowSize = Math.max(1, Math.trunc(windowMonths))
+  const startIndex = Math.max(0, endIndex - (windowSize - 1))
+  return { startIndex, endIndex }
 }
 
 const resolveWindowPoints = (points: PlayerSeriesPoint[], months: number) => {
   if (!points.length) {
     return { start: null, end: null }
   }
-  const end = points[points.length - 1]
-  const start = findWindowStart(points, months)
+  const { months: monthKeys, monthMap } = buildMonthBuckets(points, (point) => point.date)
+  const { startIndex, endIndex } = resolveWindowRange(monthKeys, months)
+  if (startIndex < 0 || endIndex < 0) {
+    return { start: null, end: null }
+  }
+  const startKey = monthKeys[startIndex]
+  const endKey = monthKeys[endIndex]
+  const startPoints = monthMap.get(startKey) ?? []
+  const endPoints = monthMap.get(endKey) ?? []
+  const start = startPoints[0] ?? null
+  let end: PlayerSeriesPoint | null = null
+  if (endPoints.length > 1) {
+    end = endPoints[endPoints.length - 1] ?? null
+  } else {
+    const nextKey = monthKeys[endIndex + 1]
+    const nextPoints = nextKey ? monthMap.get(nextKey) ?? [] : []
+    end = nextPoints[0] ?? endPoints[endPoints.length - 1] ?? null
+  }
   return { start, end }
 }
 
-const findWindowStartIndex = (dates: string[], months: number) => {
+const resolveWindowMeta = (dates: string[], months: number) => {
   if (!dates.length) {
-    return -1
+    return { startDate: '', endDate: '', possibleIntervals: 0 }
   }
-  const endDate = toDate(dates[dates.length - 1])
-  const target = new Date(endDate)
-  target.setMonth(target.getMonth() - months)
-  for (let index = dates.length - 2; index >= 0; index -= 1) {
-    if (toDate(dates[index]) <= target) {
-      return index
-    }
+  const { months: monthKeys, monthMap } = buildMonthBuckets(dates, (date) => date)
+  const { startIndex, endIndex } = resolveWindowRange(monthKeys, months)
+  if (startIndex < 0 || endIndex < 0) {
+    return { startDate: '', endDate: '', possibleIntervals: 0 }
   }
-  return 0
+  const startKey = monthKeys[startIndex]
+  const endKey = monthKeys[endIndex]
+  const startDates = monthMap.get(startKey) ?? []
+  const endDates = monthMap.get(endKey) ?? []
+  const startDate = startDates[0] ?? ''
+  let endDate = ''
+  if (endDates.length > 1) {
+    endDate = endDates[endDates.length - 1] ?? ''
+  } else {
+    const nextKey = monthKeys[endIndex + 1]
+    const nextDates = nextKey ? monthMap.get(nextKey) ?? [] : []
+    endDate = nextDates[0] ?? endDates[endDates.length - 1] ?? ''
+  }
+  const windowDates = dates.filter(
+    (date) => (!startDate || date >= startDate) && (!endDate || date <= endDate),
+  )
+  const possibleIntervals = Math.max(0, windowDates.length - 1)
+  return { startDate, endDate, possibleIntervals }
 }
 
 const buildWindowMeta = (dates: string[]) =>
   WINDOW_KEYS.reduce<Record<WindowKey, { startDate: string; endDate: string; possibleIntervals: number }>>(
     (acc, key) => {
-      if (!dates.length) {
-        acc[key] = { startDate: '', endDate: '', possibleIntervals: 0 }
-        return acc
-      }
-      const startIndex = findWindowStartIndex(dates, Number(key))
-      const endDate = dates[dates.length - 1]
-      const startDate = startIndex >= 0 ? dates[startIndex] : endDate
-      const possibleIntervals = Math.max(0, dates.length - 1 - Math.max(0, startIndex))
-      acc[key] = { startDate, endDate, possibleIntervals }
+      acc[key] = resolveWindowMeta(dates, Number(key))
       return acc
     },
     { '1': { startDate: '', endDate: '', possibleIntervals: 0 }, '3': { startDate: '', endDate: '', possibleIntervals: 0 }, '6': { startDate: '', endDate: '', possibleIntervals: 0 }, '12': { startDate: '', endDate: '', possibleIntervals: 0 } },
@@ -464,6 +528,35 @@ const finalizeGrowthGroupStats = (
   return next
 }
 
+const buildIntervalKey = (interval: IntervalMetric) =>
+  `${interval.startDate}|${interval.endDate}`
+
+const addIntervalStat = (map: Map<string, IntervalStats>, key: string, value: number) => {
+  if (!Number.isFinite(value)) {
+    return
+  }
+  const entry = map.get(key) ?? { sum: 0, count: 0 }
+  entry.sum += value
+  entry.count += 1
+  map.set(key, entry)
+}
+
+const finalizeIntervalStats = (map: Map<string, Map<string, IntervalStats>>) => {
+  const next = new Map<string, Map<string, number>>()
+  map.forEach((intervalMap, groupKey) => {
+    const avgMap = new Map<string, number>()
+    intervalMap.forEach((stats, intervalKey) => {
+      if (stats.count > 0) {
+        avgMap.set(intervalKey, stats.sum / stats.count)
+      }
+    })
+    if (avgMap.size) {
+      next.set(groupKey, avgMap)
+    }
+  })
+  return next
+}
+
 const computePercentiles = (values: Map<string, number>) => {
   const entries = Array.from(values.entries()).sort((a, b) => a[1] - b[1])
   const percentileMap = new Map<string, number>()
@@ -510,6 +603,7 @@ export function computeDataset(
     classId?: number
     baseStats: number
     level: number
+    levelSource?: LevelSource
     exp: number
     expNext: number
     mine: number
@@ -528,20 +622,21 @@ export function computeDataset(
       const members = guildMembersAtScan.get(guild.guildKey) ?? []
       guild.members.forEach((member) => {
         members.push(member.playerKey)
-        if (!playersByKey.has(member.playerKey)) {
-          playersByKey.set(member.playerKey, {
-            playerKey: member.playerKey,
-            name: member.name,
-            server: member.server,
-            playerId: member.playerId,
-            classId: member.classId,
-            baseStats: member.baseStats,
-            level: member.level,
-            exp: member.exp ?? 0,
-            expNext: member.expNext ?? 0,
-            mine: member.mine,
-            treasury: member.treasury,
-            guildKey: guild.guildKey,
+          if (!playersByKey.has(member.playerKey)) {
+            playersByKey.set(member.playerKey, {
+              playerKey: member.playerKey,
+              name: member.name,
+              server: member.server,
+              playerId: member.playerId,
+              classId: member.classId,
+              baseStats: member.baseStats,
+              level: member.level,
+              levelSource: member.levelSource,
+              exp: member.exp ?? 0,
+              expNext: member.expNext ?? 0,
+              mine: member.mine,
+              treasury: member.treasury,
+              guildKey: guild.guildKey,
             guildName: guild.guildName,
           })
         }
@@ -551,6 +646,10 @@ export function computeDataset(
 
     return { snapshot, meta, playersByKey, guildMembersAtScan, guildNameMap }
   })
+
+  indexedSnapshots.sort(
+    (a, b) => toDate(a.snapshot.scannedAt).getTime() - toDate(b.snapshot.scannedAt).getTime(),
+  )
 
   const snapshotDates = indexedSnapshots.map(({ snapshot }) => snapshot.scannedAt)
   const windowMetaByKey = buildWindowMeta(snapshotDates)
@@ -618,6 +717,7 @@ export function computeDataset(
           date: snapshot.scannedAt,
           baseStats: stats.baseStats,
           level: stats.level,
+          levelSource: stats.levelSource,
           exp: stats.exp,
           expNext: stats.expNext,
           expTotal: 0,
@@ -663,6 +763,7 @@ export function computeDataset(
         date: snapshot.scannedAt,
         baseStats: stats.baseStats,
         level: stats.level,
+        levelSource: stats.levelSource,
         exp: stats.exp,
         expNext: stats.expNext,
         expTotal: 0,
@@ -702,28 +803,28 @@ export function computeDataset(
 
     WINDOW_KEYS.forEach((windowKey) => {
       const windowMonths = Number(windowKey)
-      const startPoint = findWindowStart(player.points, windowMonths)
-      if (!startPoint || !lastPoint) {
+      const { start, end } = resolveWindowPoints(player.points, windowMonths)
+      if (!start || !end) {
         return
       }
       windowMetrics.baseStats[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.baseStats,
       )
       windowMetrics.level[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.level,
       )
       windowMetrics.mine[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.mine,
       )
       windowMetrics.treasury[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.treasury,
       )
     })
@@ -875,28 +976,28 @@ export function computeDataset(
 
     WINDOW_KEYS.forEach((windowKey) => {
       const windowMonths = Number(windowKey)
-      const startPoint = findWindowStart(player.points, windowMonths)
-      if (!startPoint || !lastPoint) {
+      const { start, end } = resolveWindowPoints(player.points, windowMonths)
+      if (!start || !end) {
         return
       }
       windowMetrics.baseStats[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.baseStats,
       )
       windowMetrics.level[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.level,
       )
       windowMetrics.mine[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.mine,
       )
       windowMetrics.treasury[windowKey] = buildWindowMetric(
-        startPoint,
-        lastPoint,
+        start,
+        end,
         (point) => point.treasury,
       )
     })
@@ -1013,6 +1114,22 @@ export function computeDataset(
     })
   }
 
+  const serverTop150KeysByServer = new Map<string, Set<string>>()
+  if (latestIndex) {
+    serverTopKeysByServer.forEach((keys, server) => {
+      const sortedByBase = [...keys]
+        .map((playerKey) => ({
+          playerKey,
+          baseStats: latestIndex.playersByKey.get(playerKey)?.baseStats ?? 0,
+        }))
+        .sort((a, b) => b.baseStats - a.baseStats)
+      const topKeys = sortedByBase.slice(0, SERVER_AVG_TOP_LIMIT).map((entry) => entry.playerKey)
+      if (topKeys.length) {
+        serverTop150KeysByServer.set(server, new Set(topKeys))
+      }
+    })
+  }
+
   const globalPlayersByKey = new Map<string, PlayerComputed>()
   const globalPlayersByServer = new Map<string, PlayerComputed[]>()
   globalPlayers.forEach((player) => {
@@ -1084,11 +1201,14 @@ export function computeDataset(
       return
     }
     const customGuildKey = customGuildByPlayer.get(player.playerKey)
+    const serverTop150 = serverTop150KeysByServer.get(player.server)
+    const includeInServerAvg =
+      !serverTop150 || serverTop150.size === 0 || serverTop150.has(player.playerKey)
     WINDOW_KEYS.forEach((windowKey) => {
       const inputs = growthInputs[windowKey]
       const absPerDay = inputs.absPerDay
       const relPerDay = inputs.relPerDay
-      if (Number.isFinite(absPerDay)) {
+      if (includeInServerAvg && Number.isFinite(absPerDay)) {
         const serverEntry = serverStatsByWindow[windowKey].get(player.server) ?? {
           sum: 0,
           count: 0,
@@ -1128,6 +1248,54 @@ export function computeDataset(
       realGuildStatsByWindow[windowKey],
     )
   })
+
+  const serverIntervalStatsByWindow = WINDOW_KEYS.reduce<
+    Record<WindowKey, Map<string, Map<string, IntervalStats>>>
+  >(
+    (acc, key) => {
+      acc[key] = new Map()
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
+
+  globalPlayers.forEach((player) => {
+    const serverTop150 = serverTop150KeysByServer.get(player.server)
+    const includeInServerAvg =
+      !serverTop150 || serverTop150.size === 0 || serverTop150.has(player.playerKey)
+    WINDOW_KEYS.forEach((windowKey) => {
+      const windowMeta = windowMetaByKey[windowKey]
+      const intervals = player.intervals.baseStats.filter(
+        (interval) =>
+          isWithinWindow(interval.startDate, windowMeta) &&
+          isWithinWindow(interval.endDate, windowMeta),
+      )
+      intervals.forEach((interval) => {
+        if (interval.days <= 0) {
+          return
+        }
+        if (!includeInServerAvg) {
+          return
+        }
+        const intervalKey = buildIntervalKey(interval)
+        const perDay = interval.perDay
+        const serverMap =
+          serverIntervalStatsByWindow[windowKey].get(player.server) ?? new Map()
+        addIntervalStat(serverMap, intervalKey, perDay)
+        serverIntervalStatsByWindow[windowKey].set(player.server, serverMap)
+      })
+    })
+  })
+
+  const serverIntervalAveragesByWindow = WINDOW_KEYS.reduce<
+    Record<WindowKey, Map<string, Map<string, number>>>
+  >(
+    (acc, key) => {
+      acc[key] = finalizeIntervalStats(serverIntervalStatsByWindow[key])
+      return acc
+    },
+    { '1': new Map(), '3': new Map(), '6': new Map(), '12': new Map() },
+  )
 
   globalPlayersByServer.forEach((list, server) => {
     WINDOW_KEYS.forEach((windowKey) => {
@@ -1184,39 +1352,6 @@ export function computeDataset(
     })
   })
 
-  const rosterMineValuesByWindow = WINDOW_KEYS.reduce<Record<WindowKey, number[]>>(
-    (acc, key) => {
-      acc[key] = []
-      return acc
-    },
-    { '1': [], '3': [], '6': [], '12': [] },
-  )
-  const rosterTreasuryValuesByWindow = WINDOW_KEYS.reduce<Record<WindowKey, number[]>>(
-    (acc, key) => {
-      acc[key] = []
-      return acc
-    },
-    { '1': [], '3': [], '6': [], '12': [] },
-  )
-
-  players.forEach((player) => {
-    WINDOW_KEYS.forEach((windowKey) => {
-      const minePerDay = player.windowMetrics.mine[windowKey]?.perDay
-      if (Number.isFinite(minePerDay ?? Number.NaN)) {
-        rosterMineValuesByWindow[windowKey].push(minePerDay as number)
-      }
-      const treasuryPerDay = player.windowMetrics.treasury[windowKey]?.perDay
-      if (Number.isFinite(treasuryPerDay ?? Number.NaN)) {
-        rosterTreasuryValuesByWindow[windowKey].push(treasuryPerDay as number)
-      }
-    })
-  })
-
-  WINDOW_KEYS.forEach((windowKey) => {
-    rosterMineValuesByWindow[windowKey].sort((a, b) => a - b)
-    rosterTreasuryValuesByWindow[windowKey].sort((a, b) => a - b)
-  })
-
 const resolveRatio = (value: number, primary: number, fallback: number) => {
   if (primary > 0) {
     return value / primary
@@ -1240,9 +1375,12 @@ const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
     const customGuildKey = customGuildByPlayer.get(context.playerKey)
 
     const avgTop100 = serverTopAverageByWindow[context.windowKey].get(context.server) ?? 0
-    const serverAvg = serverAverageByWindow[context.windowKey].get(context.server) ?? 0
+    const serverAvgRaw = serverAverageByWindow[context.windowKey].get(context.server) ?? 0
+    const serverAvgAbsPerDay =
+      serverAvgRaw > 0 ? serverAvgRaw : avgTop100 > 0 ? avgTop100 : 0
 
-    const absVsTop100 = resolveRatio(absPerDay, avgTop100, serverAvg)
+    const absVsTop100 = resolveRatio(absPerDay, avgTop100, serverAvgAbsPerDay)
+    const absVsServerAvg = resolveRatio(absPerDay, serverAvgAbsPerDay, avgTop100)
 
     const customGuildStats = customGuildKey
       ? customGuildAverageByWindow[context.windowKey].get(customGuildKey)
@@ -1255,29 +1393,37 @@ const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
 
     let guildAbsAvg = 0
     let guildRelAvg = 0
+    let guildRefType: 'custom' | 'real' | 'none' = 'none'
+    let guildRefKey: string | null = null
     if (isGuildValid(customGuildStats)) {
       guildAbsAvg = customGuildStats?.abs ?? 0
       guildRelAvg = customGuildStats?.rel ?? 0
+      guildRefType = 'custom'
+      guildRefKey = customGuildKey ?? null
     } else if (isGuildValid(realGuildStats)) {
       guildAbsAvg = realGuildStats?.abs ?? 0
       guildRelAvg = realGuildStats?.rel ?? 0
+      guildRefType = 'real'
+      guildRefKey = realGuildKey ?? null
     } else {
-      guildAbsAvg = serverAvg
+      guildAbsAvg = serverAvgAbsPerDay
     }
 
-    const absVsGuild = resolveRatio(absPerDay, guildAbsAvg, serverAvg)
+    const absVsGuild = resolveRatio(absPerDay, guildAbsAvg, serverAvgAbsPerDay)
     const relVsGuild = guildRelAvg > 0 ? relPerDay / guildRelAvg : 1
 
-    const absNServer = mapRatio(absVsTop100)
+    const absNServer = mapRatio(absVsServerAvg)
     const absNGuild = mapRatio(absVsGuild)
-    const relN = guildRelAvg > 0 ? mapRatio(relVsGuild) : 0.5
+    const relN = 0.5
     const momRatio = 1
     const momN = 0.5
-    const absN = 0.7 * absNServer + 0.3 * absNGuild
+    const absN = absNServer
     const growthScore = clamp(0.7 * absN + 0.2 * relN + 0.1 * momN, 0, 1)
 
     const growthDebug: GrowthDebug = {
       absPerDay,
+      serverAvgAbsPerDay,
+      absVsServerAvg,
       absVsTop100,
       absVsGuild,
       relPerDay,
@@ -1300,20 +1446,75 @@ const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
       }
       return true
     })
-    const paces = intervals.map((interval) => interval.perDay)
-    const activeShare = paces.length
-      ? paces.filter((pace) => pace > 0).length / paces.length
-      : 0
-    const paceMedian = paces.length ? median(paces) : 0
-    const volatility = medianAbsoluteDeviation(paces)
-    const volatilityNorm = paces.length
-      ? clamp(volatility / (Math.abs(paceMedian) + 1), 0, 1)
-      : 1
-    const consistencyScore = clamp(
-      0.7 * activeShare + 0.3 * (1 - volatilityNorm),
-      0,
-      1,
+
+    const serverIntervalMap = serverIntervalAveragesByWindow[context.windowKey].get(context.server)
+
+    let ratioMin = Number.POSITIVE_INFINITY
+    let ratioMax = Number.NEGATIVE_INFINITY
+    let ratioMinCapped = Number.POSITIVE_INFINITY
+    let ratioMaxCapped = Number.NEGATIVE_INFINITY
+    const ratios = intervals
+      .filter((interval) => interval.days > 0)
+      .map((interval) => {
+        const intervalKey = buildIntervalKey(interval)
+        const serverAvg = serverIntervalMap?.get(intervalKey) ?? 0
+        const ratioRaw = serverAvg > 0 ? interval.perDay / serverAvg : 1
+        const ratioSafe = Number.isFinite(ratioRaw) ? ratioRaw : 1
+        ratioMin = Math.min(ratioMin, ratioSafe)
+        ratioMax = Math.max(ratioMax, ratioSafe)
+        const ratioCapped = clamp(ratioSafe, CONSISTENCY_RATIO_MIN, CONSISTENCY_RATIO_MAX)
+        ratioMinCapped = Math.min(ratioMinCapped, ratioCapped)
+        ratioMaxCapped = Math.max(ratioMaxCapped, ratioCapped)
+        return ratioCapped
+      })
+
+    let aboveShare = 0.5
+    let gap = 1
+    let closeness = 0.5
+    let stability = 0.5
+    let mad: number | null = null
+    if (ratios.length) {
+      aboveShare = ratios.filter((ratio) => ratio >= 1).length / ratios.length
+      const xValues = ratios.map((ratio) => Math.log(Math.max(ratio, CONSISTENCY_EPS)))
+      gap = average(xValues.map((value) => Math.abs(value)))
+      closeness = Math.exp(-CONSISTENCY_GAP_K * gap)
+      if (xValues.length > 1) {
+        mad = medianAbsoluteDeviation(xValues)
+        stability = Math.exp(-CONSISTENCY_MAD_K * mad)
+      }
+    }
+
+    const consBase = 0.4 * aboveShare + 0.35 * closeness + 0.25 * stability
+    const consistencyScore = clamp(consBase, 0, 1)
+
+    const levelIntervals = context.levelIntervals.filter((interval) => {
+      if (windowStartDate && interval.startDate < windowStartDate) {
+        return false
+      }
+      if (windowEndDate && interval.endDate > windowEndDate) {
+        return false
+      }
+      return true
+    })
+    const levelWindowDays = levelIntervals.reduce((sum, interval) => sum + interval.days, 0)
+    const windowPoints = context.points.filter((point) =>
+      isWithinWindow(point.date, windowMeta),
     )
+    const startPoint = windowPoints[0]
+    const endPoint = windowPoints[windowPoints.length - 1]
+    const levelStart = startPoint?.level ?? null
+    const levelEnd = endPoint?.level ?? null
+    const levelKnown = levelStart !== null && levelEnd !== null
+    const levelDeltaRaw = levelKnown ? levelEnd - levelStart : null
+    const levelDeltaClamped =
+      levelDeltaRaw !== null ? Math.max(0, levelDeltaRaw) : null
+    const levelPer30 =
+      levelKnown && levelWindowDays > 0
+        ? (levelDeltaClamped ?? 0) / levelWindowDays * 30
+        : null
+    const lowLeveling = levelPer30 !== null ? levelPer30 < 3 : false
+    const levelPenalty =
+      levelPer30 !== null ? clamp((3 - levelPer30) / 3, 0, 1) : 0
 
     const possibleIntervals = windowMeta.possibleIntervals
     const coverage = possibleIntervals > 0 ? intervals.length / possibleIntervals : 1
@@ -1325,28 +1526,80 @@ const computeScoreForWindow = (context: ScoreContext): ScoreWindowMeta => {
     const treasuryCapped =
       (start?.treasury ?? 0) >= TREASURY_CAP || (end?.treasury ?? 0) >= TREASURY_CAP
 
-    const minePerDay = context.windowMetrics.mine[context.windowKey]?.perDay ?? 0
-    const treasuryPerDay =
-      context.windowMetrics.treasury[context.windowKey]?.perDay ?? 0
-    const mineScore = mineCapped
-      ? 1
-      : percentileFromSorted(rosterMineValuesByWindow[context.windowKey], minePerDay)
-    const treasuryScore = treasuryCapped
-      ? 1
-      : percentileFromSorted(rosterTreasuryValuesByWindow[context.windowKey], treasuryPerDay)
-
     const scoreRaw =
       SCORE_WEIGHTS.growth * growthScore +
-      SCORE_WEIGHTS.consistency * consistencyScore +
-      SCORE_WEIGHTS.mine * mineScore +
-      SCORE_WEIGHTS.treasury * treasuryScore
+      SCORE_WEIGHTS.consistency * consistencyScore
+    const scoreWithCoverage = scoreRaw * coverageFactor
+    const scoreAfterLevelPenalty = scoreWithCoverage * (1 - 0.15 * levelPenalty)
+    const score = clamp(scoreAfterLevelPenalty, 0, 1)
+
+    const scoreDebug: ScoreDebug = {
+      final: {
+        scoreRaw,
+        levelPenalty,
+        scoreAfterLevelPenalty,
+        coverageFactor,
+        scoreFinal: score,
+      },
+      weights: {
+        wGrowth: SCORE_WEIGHTS.growth,
+        wConsistency: SCORE_WEIGHTS.consistency,
+        levelPenaltyMax: 0.15,
+      },
+      growth: {
+        absPerDay,
+        top100AvgAbsPerDay: avgTop100,
+        absVsTop100,
+        serverAvgAbsPerDay,
+        absVsServerAvg,
+        guildRefType,
+        guildRefKey,
+        guildAvgAbsPerDay: guildAbsAvg,
+        absVsGuild,
+        absN_server: absNServer,
+        absN_guild: absNGuild,
+        absN,
+        growth: growthScore,
+        relPerDay,
+        relVsGuild: guildRelAvg > 0 ? relVsGuild : null,
+        relN,
+        momRatio,
+        momN,
+      },
+      consistency: {
+        aboveShare,
+        gap,
+        closeness,
+        mad,
+        stability,
+        consBase,
+        consistency: consistencyScore,
+        rMin: Number.isFinite(ratioMin) ? ratioMin : null,
+        rMax: Number.isFinite(ratioMax) ? ratioMax : null,
+        rMinCapped: Number.isFinite(ratioMinCapped) ? ratioMinCapped : null,
+        rMaxCapped: Number.isFinite(ratioMaxCapped) ? ratioMaxCapped : null,
+      },
+      level: {
+        levelKnown,
+        levelStart,
+        levelEnd,
+        levelDeltaRaw,
+        levelDelta: levelDeltaClamped,
+        windowDays: levelWindowDays,
+        levelPer30,
+        lowLeveling,
+      },
+    }
 
   return {
-    score: scoreRaw * coverageFactor,
+    score,
     growthScore,
     growthDebug,
+    scoreDebug,
     percentileTop500,
     consistencyScore,
+    levelPer30,
+    lowLeveling,
     coverage,
     mineCapped,
     treasuryCapped,
@@ -1358,10 +1611,9 @@ const buildWindowMetricsForPoints = (points: PlayerSeriesPoint[]): PlayerWindowM
   if (!points.length) {
     return windowMetrics
   }
-  const end = points[points.length - 1]
   WINDOW_KEYS.forEach((windowKey) => {
-    const start = findWindowStart(points, Number(windowKey))
-    if (!start) return
+    const { start, end } = resolveWindowPoints(points, Number(windowKey))
+    if (!start || !end) return
     windowMetrics.baseStats[windowKey] = buildWindowMetric(start, end, (point) => point.baseStats)
     windowMetrics.level[windowKey] = buildWindowMetric(start, end, (point) => point.level ?? 0)
     windowMetrics.mine[windowKey] = buildWindowMetric(start, end, (point) => point.mine ?? 0)
@@ -1383,6 +1635,7 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
     }
     const windowMeta = buildWindowMeta(slice.map((point) => point.date))
     const intervals = buildIntervals(slice, (point) => point.baseStats)
+    const levelIntervals = buildIntervals(slice, (point) => point.level ?? 0)
     const windowMetrics = buildWindowMetricsForPoints(slice)
     const growthInputsByWindow = buildGrowthInputsForPoints(slice, intervals, windowMeta)
     const context: ScoreContext = {
@@ -1391,6 +1644,7 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
       server: player.server,
       points: slice,
       intervals,
+      levelIntervals,
       windowMetrics,
       windowMeta,
       growthInputsByWindow,
@@ -1417,10 +1671,174 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
       }
       const growthInputsByWindow = growthInputsMap.get(player.playerKey)
       const growthDebugByWindow: Record<WindowKey, GrowthDebug> = {
-        '1': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
-        '3': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
-        '6': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
-        '12': { absPerDay: 0, absVsTop100: 0, absVsGuild: 0, relPerDay: 0, momRatio: 1 },
+        '1': {
+          absPerDay: 0,
+          serverAvgAbsPerDay: 0,
+          absVsServerAvg: 0,
+          absVsTop100: 0,
+          absVsGuild: 0,
+          relPerDay: 0,
+          momRatio: 1,
+        },
+        '3': {
+          absPerDay: 0,
+          serverAvgAbsPerDay: 0,
+          absVsServerAvg: 0,
+          absVsTop100: 0,
+          absVsGuild: 0,
+          relPerDay: 0,
+          momRatio: 1,
+        },
+        '6': {
+          absPerDay: 0,
+          serverAvgAbsPerDay: 0,
+          absVsServerAvg: 0,
+          absVsTop100: 0,
+          absVsGuild: 0,
+          relPerDay: 0,
+          momRatio: 1,
+        },
+        '12': {
+          absPerDay: 0,
+          serverAvgAbsPerDay: 0,
+          absVsServerAvg: 0,
+          absVsTop100: 0,
+          absVsGuild: 0,
+          relPerDay: 0,
+          momRatio: 1,
+        },
+      }
+      const scoreDebugByWindow: Record<WindowKey, ScoreDebug> = {
+        '1': {
+          final: { scoreRaw: 0, levelPenalty: 0, scoreAfterLevelPenalty: 0 },
+          weights: { wGrowth: SCORE_WEIGHTS.growth, wConsistency: SCORE_WEIGHTS.consistency, levelPenaltyMax: 0.15 },
+          growth: {
+            absPerDay: 0,
+            top100AvgAbsPerDay: 0,
+            absVsTop100: 0,
+            serverAvgAbsPerDay: 0,
+            absVsServerAvg: 0,
+            guildRefType: 'none',
+            guildRefKey: null,
+            guildAvgAbsPerDay: 0,
+            absVsGuild: 0,
+            absN_server: 0,
+            absN_guild: 0,
+            absN: 0,
+            growth: 0,
+          },
+          consistency: {
+            aboveShare: 0,
+            gap: 0,
+            closeness: 0,
+            stability: 0,
+            consBase: 0,
+            consistency: 0,
+          },
+          level: { levelKnown: false, levelDelta: null, windowDays: 0, levelPer30: null, lowLeveling: false },
+        },
+        '3': {
+          final: { scoreRaw: 0, levelPenalty: 0, scoreAfterLevelPenalty: 0 },
+          weights: { wGrowth: SCORE_WEIGHTS.growth, wConsistency: SCORE_WEIGHTS.consistency, levelPenaltyMax: 0.15 },
+          growth: {
+            absPerDay: 0,
+            top100AvgAbsPerDay: 0,
+            absVsTop100: 0,
+            serverAvgAbsPerDay: 0,
+            absVsServerAvg: 0,
+            guildRefType: 'none',
+            guildRefKey: null,
+            guildAvgAbsPerDay: 0,
+            absVsGuild: 0,
+            absN_server: 0,
+            absN_guild: 0,
+            absN: 0,
+            growth: 0,
+          },
+          consistency: {
+            aboveShare: 0,
+            gap: 0,
+            closeness: 0,
+            stability: 0,
+            consBase: 0,
+            consistency: 0,
+          },
+          level: { levelKnown: false, levelDelta: null, windowDays: 0, levelPer30: null, lowLeveling: false },
+        },
+        '6': {
+          final: { scoreRaw: 0, levelPenalty: 0, scoreAfterLevelPenalty: 0 },
+          weights: { wGrowth: SCORE_WEIGHTS.growth, wConsistency: SCORE_WEIGHTS.consistency, levelPenaltyMax: 0.15 },
+          growth: {
+            absPerDay: 0,
+            top100AvgAbsPerDay: 0,
+            absVsTop100: 0,
+            serverAvgAbsPerDay: 0,
+            absVsServerAvg: 0,
+            guildRefType: 'none',
+            guildRefKey: null,
+            guildAvgAbsPerDay: 0,
+            absVsGuild: 0,
+            absN_server: 0,
+            absN_guild: 0,
+            absN: 0,
+            growth: 0,
+          },
+          consistency: {
+            aboveShare: 0,
+            gap: 0,
+            closeness: 0,
+            stability: 0,
+            consBase: 0,
+            consistency: 0,
+          },
+          level: { levelKnown: false, levelDelta: null, windowDays: 0, levelPer30: null, lowLeveling: false },
+        },
+        '12': {
+          final: { scoreRaw: 0, levelPenalty: 0, scoreAfterLevelPenalty: 0 },
+          weights: { wGrowth: SCORE_WEIGHTS.growth, wConsistency: SCORE_WEIGHTS.consistency, levelPenaltyMax: 0.15 },
+          growth: {
+            absPerDay: 0,
+            top100AvgAbsPerDay: 0,
+            absVsTop100: 0,
+            serverAvgAbsPerDay: 0,
+            absVsServerAvg: 0,
+            guildRefType: 'none',
+            guildRefKey: null,
+            guildAvgAbsPerDay: 0,
+            absVsGuild: 0,
+            absN_server: 0,
+            absN_guild: 0,
+            absN: 0,
+            growth: 0,
+          },
+          consistency: {
+            aboveShare: 0,
+            gap: 0,
+            closeness: 0,
+            stability: 0,
+            consBase: 0,
+            consistency: 0,
+          },
+          level: { levelKnown: false, levelDelta: null, windowDays: 0, levelPer30: null, lowLeveling: false },
+        },
+      }
+      const scoreBreakdownByWindow: Record<WindowKey, ScoreDebug> = {
+        '1': scoreDebugByWindow['1'],
+        '3': scoreDebugByWindow['3'],
+        '6': scoreDebugByWindow['6'],
+        '12': scoreDebugByWindow['12'],
+      }
+      const lowLevelingByWindow: Record<WindowKey, boolean> = {
+        '1': false,
+        '3': false,
+        '6': false,
+        '12': false,
+      }
+      const levelPer30ByWindow: Record<WindowKey, number | null> = {
+        '1': null,
+        '3': null,
+        '6': null,
+        '12': null,
       }
       const buildContext = (windowKey: WindowKey): ScoreContext => ({
         windowKey,
@@ -1428,6 +1846,7 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
         server: player.server,
         points: player.points,
         intervals: player.intervals.baseStats,
+        levelIntervals: player.intervals.level,
         windowMetrics: player.windowMetrics,
         windowMeta: windowMetaByKey,
         growthInputsByWindow,
@@ -1443,9 +1862,19 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
         if (meta.growthDebug) {
           growthDebugByWindow[windowKey] = meta.growthDebug
         }
+        if (meta.scoreDebug) {
+          scoreDebugByWindow[windowKey] = meta.scoreDebug
+          scoreBreakdownByWindow[windowKey] = meta.scoreDebug
+        }
+        lowLevelingByWindow[windowKey] = meta.lowLeveling
+        levelPer30ByWindow[windowKey] = meta.levelPer30
       })
       player.scoreByWindow = scoreByWindow
+      player.scoreBreakdownByWindow = scoreBreakdownByWindow
+      player.scoreDebugByWindow = scoreDebugByWindow
       player.growthDebugByWindow = growthDebugByWindow
+      player.lowLevelingByWindow = lowLevelingByWindow
+      player.levelPer30ByWindow = levelPer30ByWindow
       player.score = scoreByWindow[DEFAULT_SCORE_WINDOW] ?? 0
 
       const strengths: string[] = []
@@ -1454,6 +1883,7 @@ const buildScoreTimelineForPlayer = (player: PlayerComputed): PlayerScoreSnapsho
       if (defaultMeta.consistencyScore >= 0.8) strengths.push('Consistent')
       if (defaultMeta.mineCapped) strengths.push('Mine Capped')
       if (defaultMeta.treasuryCapped) strengths.push('Treasury Capped')
+      if (defaultMeta.lowLeveling) weaknesses.push('Low Leveling')
       const percentileLabel = `Top500 P${Math.round(defaultMeta.percentileTop500 * 100)}`
       if (defaultMeta.percentileTop500 >= 0.5) {
         strengths.push(percentileLabel)

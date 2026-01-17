@@ -97,6 +97,9 @@ export default function PlayerDetail() {
           series={{
             label: 'BaseStats',
             points: chartPoints.map((point) => point.baseStats),
+            tooltips: chartPoints.map(
+              (point) => `${formatDate(point.date)} | ${formatNumber(point.baseStats, 1)}`,
+            ),
           }}
           latestLabel="BaseStats (latest)"
           startLabel="BaseStats (start)"
@@ -107,6 +110,9 @@ export default function PlayerDetail() {
           series={{
             label: 'Level',
             points: chartPoints.map((point) => point.level),
+            tooltips: chartPoints.map(
+              (point) => `${formatDate(point.date)} | ${formatNumber(point.level, 0)}`,
+            ),
           }}
           latestLabel="Level (latest)"
           startLabel="Level (start)"
@@ -117,6 +123,9 @@ export default function PlayerDetail() {
           series={{
             label: 'Mine',
             points: chartPoints.map((point) => point.mine),
+            tooltips: chartPoints.map(
+              (point) => `${formatDate(point.date)} | ${formatNumber(point.mine, 2)}`,
+            ),
           }}
           latestLabel="Mine (latest)"
           startLabel="Mine (start)"
@@ -127,6 +136,9 @@ export default function PlayerDetail() {
           series={{
             label: 'Treasury',
             points: chartPoints.map((point) => point.treasury),
+            tooltips: chartPoints.map(
+              (point) => `${formatDate(point.date)} | ${formatNumber(point.treasury, 2)}`,
+            ),
           }}
           latestLabel="Treasury (latest)"
           startLabel="Treasury (start)"
@@ -137,6 +149,9 @@ export default function PlayerDetail() {
           series={{
             label: 'Exp',
             points: expSeries,
+            tooltips: chartPoints.map(
+              (point) => `${formatDate(point.date)} | ${formatNumber(point.expTotal ?? 0, 0)}`,
+            ),
           }}
           latestLabel="Exp (latest)"
           startLabel="Exp (start)"

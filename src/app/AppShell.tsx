@@ -44,24 +44,30 @@ export default function AppShell() {
         </div>
       </header>
       <aside className="sidebar">
-        <NavLink className="nav-link" to="/" end>
-          Dashboard
-        </NavLink>
-        <NavLink className="nav-link" to="/memberlist">
-          Memberlist
-        </NavLink>
-        <NavLink className="nav-link" to="/guilds">
-          Guilds
-        </NavLink>
-        <NavLink className="nav-link" to="/import">
-          Import
-        </NavLink>
-        <NavLink className="nav-link" to="/ranking">
-          Scouting
-        </NavLink>
-        <NavLink className="nav-link" to="/months">
-          Months
-        </NavLink>
+        <div className="nav-group">
+          <div className="nav-group-title">Fusion planner</div>
+          <NavLink className="nav-link" to="/import">
+            Import
+          </NavLink>
+          <NavLink className="nav-link" to="/memberlist">
+            Memberlist
+          </NavLink>
+          <NavLink className="nav-link" to="/" end>
+            Dashboard
+          </NavLink>
+          <NavLink className="nav-link" to="/ranking">
+            Scouting
+          </NavLink>
+          <NavLink className="nav-link" to="/months">
+            Months
+          </NavLink>
+        </div>
+        <div className="nav-group">
+          <div className="nav-group-title">Guild analytics</div>
+          <NavLink className="nav-link" to="/guilds">
+            Guilds
+          </NavLink>
+        </div>
         <NavLink className="nav-link" to="/toplists">
           Toplists
         </NavLink>

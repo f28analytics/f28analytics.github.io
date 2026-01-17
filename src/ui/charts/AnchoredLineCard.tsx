@@ -6,6 +6,7 @@ export type TrendSeries = {
   unit?: string
   points: number[]
   subLabel?: string
+  tooltips?: string[]
 }
 
 type AnchoredLineCardProps = {
@@ -66,7 +67,15 @@ export default function AnchoredLineCard({
       </header>
 
       <div className="anchored-card__chart">
-        <AnchoredLineChart points={series.points} avgValue={avg} showAvg showDots showFill showXLabels />
+        <AnchoredLineChart
+          points={series.points}
+          dotTooltips={series.tooltips}
+          avgValue={avg}
+          showAvg
+          showDots
+          showFill
+          showXLabels
+        />
       </div>
 
       <footer className="anchored-card__footer">

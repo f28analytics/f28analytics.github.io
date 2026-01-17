@@ -43,6 +43,7 @@ export type NormalizedMember = {
   classId?: number
   baseStats: number
   level: number
+  levelSource?: LevelSource
   exp: number
   expNext: number
   mine: number
@@ -60,6 +61,8 @@ export type NormalizedSnapshot = {
   guilds: NormalizedGuild[]
 }
 
+export type LevelSource = 'player' | 'guild' | 'unknown'
+
 export type RawToNormalizedAdapter = {
   id: string
   label: string
@@ -71,6 +74,7 @@ export type PlayerSeriesPoint = {
   date: string
   baseStats: number
   level: number
+  levelSource?: LevelSource
   exp: number
   expNext: number
   expTotal?: number
@@ -95,10 +99,70 @@ export type PlayerScoreSnapshot = {
 
 export type GrowthDebug = {
   absPerDay: number
+  serverAvgAbsPerDay: number
+  absVsServerAvg: number
   absVsTop100: number
   absVsGuild: number
   relPerDay: number
   momRatio: number
+}
+
+export type ScoreDebug = {
+  final: {
+    scoreRaw: number
+    levelPenalty: number
+    scoreAfterLevelPenalty: number
+    coverageFactor?: number
+    scoreFinal?: number
+  }
+  weights: {
+    wGrowth: number
+    wConsistency: number
+    levelPenaltyMax: number
+  }
+  growth: {
+    absPerDay: number
+    top100AvgAbsPerDay: number
+    absVsTop100: number
+    serverAvgAbsPerDay: number
+    absVsServerAvg: number
+    guildRefType: 'custom' | 'real' | 'none'
+    guildRefKey?: string | null
+    guildAvgAbsPerDay: number
+    absVsGuild: number
+    absN_server: number
+    absN_guild: number
+    absN: number
+    growth: number
+    relPerDay?: number
+    relVsGuild?: number | null
+    relN?: number
+    momRatio?: number
+    momN?: number
+  }
+  consistency: {
+    aboveShare: number
+    gap: number
+    closeness: number
+    mad?: number | null
+    stability: number
+    consBase: number
+    consistency: number
+    rMin?: number | null
+    rMax?: number | null
+    rMinCapped?: number | null
+    rMaxCapped?: number | null
+  }
+  level: {
+    levelKnown: boolean
+    levelStart?: number | null
+    levelEnd?: number | null
+    levelDeltaRaw?: number | null
+    levelDelta: number | null
+    windowDays: number
+    levelPer30: number | null
+    lowLeveling: boolean
+  }
 }
 
 export type GuildSeriesPoint = {
@@ -196,7 +260,11 @@ export type PlayerComputed = {
   }
   score: number
   scoreByWindow?: Record<WindowKey, number>
+  scoreBreakdownByWindow?: Record<WindowKey, ScoreDebug>
+  scoreDebugByWindow?: Record<WindowKey, ScoreDebug>
   growthDebugByWindow?: Record<WindowKey, GrowthDebug>
+  lowLevelingByWindow?: Record<WindowKey, boolean>
+  levelPer30ByWindow?: Record<WindowKey, number | null>
   scoreTimeline?: PlayerScoreSnapshot[]
   rank: number
   recommendation: 'Main' | 'Wing' | 'None'

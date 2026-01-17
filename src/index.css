@@ -646,6 +646,22 @@ input {
   display: block;
 }
 
+.player-profile__trend-wrapper {
+  position: relative;
+}
+
+.player-profile__trend-dots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.player-profile__trend-dot-anchor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
 .player-profile__trend-chart--empty {
   height: 120px;
   border-radius: 12px;
@@ -682,9 +698,18 @@ input {
 }
 
 .player-profile__trend-dot {
-  fill: rgba(230, 237, 246, 0.85);
-  stroke: rgba(97, 216, 186, 0.85);
-  stroke-width: 2;
+  width: 8px;
+  height: 8px;
+  display: block;
+  border-radius: 999px;
+  background: rgba(230, 237, 246, 0.85);
+  border: 2px solid rgba(97, 216, 186, 0.85);
+  transition: transform 0.15s ease;
+  transform-origin: center;
+}
+
+.player-profile__trend-dot:hover {
+  transform: scale(1.4);
 }
 
 .player-profile__trend-xlabels text {

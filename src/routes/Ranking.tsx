@@ -8,7 +8,7 @@ import RankingScoreFlyout from '../ui/RankingScoreFlyout'
 import './Ranking.css'
 
 type SortKey = 'score' | 'baseStats' | 'statsPlus' | 'level' | 'mine' | 'treasury'
-type FlyoutSource = 'baseStats' | 'statsPlus'
+type FlyoutSource = 'baseStats' | 'statsPlus' | 'level'
 type TabKey = 'ranking' | 'scouting'
 type StatusLabel = 'Main' | 'Wing' | 'Watchlist'
 
@@ -120,12 +120,14 @@ const buildStatusByKey = (columns: Record<MemberlistColumn, string[]>) => {
   return map
 }
 
-const buildRecommendationMap = (players: PlayerComputed[]) => {
+const buildRecommendationMap = (players: PlayerComputed[], windowKey: WindowKey) => {
   const recommendations = new Map<string, PlayerComputed['recommendation']>()
   if (!players.length) {
     return recommendations
   }
-  const sortedByScore = [...players].sort((a, b) => b.score - a.score)
+  const scoreValue = (player: PlayerComputed) =>
+    player.scoreByWindow?.[windowKey] ?? player.score
+  const sortedByScore = [...players].sort((a, b) => scoreValue(b) - scoreValue(a))
   const mainSet = new Set(sortedByScore.slice(0, 50).map((player) => player.playerKey))
   const wingSet = new Set(sortedByScore.slice(50, 100).map((player) => player.playerKey))
   players.forEach((player) => {
@@ -170,12 +172,12 @@ export default function Ranking() {
     [scoutPlayers, poolKeySet],
   )
   const poolRecommendationByKey = useMemo(
-    () => buildRecommendationMap(poolPlayers),
-    [poolPlayers],
+    () => buildRecommendationMap(poolPlayers, windowKey),
+    [poolPlayers, windowKey],
   )
   const scoutRecommendationByKey = useMemo(
-    () => buildRecommendationMap(scoutPlayers),
-    [scoutPlayers],
+    () => buildRecommendationMap(scoutPlayers, windowKey),
+    [scoutPlayers, windowKey],
   )
 
   const guildOptions = useMemo(
@@ -410,6 +412,7 @@ export default function Ranking() {
         onRowOpen={(playerKey) => navigate(`/player/${encodeURIComponent(playerKey)}`)}
         onBaseStatsHeaderClick={() => openFlyout('baseStats')}
         onStatsPlusHeaderClick={() => openFlyout('statsPlus')}
+        onLevelHeaderClick={() => openFlyout('level')}
         onScoreHeaderClick={() => setScoreFlyoutOpen(true)}
       />
 
@@ -425,6 +428,7 @@ export default function Ranking() {
         open={scoreFlyoutOpen}
         onClose={() => setScoreFlyoutOpen(false)}
         player={selectedPlayer}
+        windowKey={windowKey}
       />
     </div>
   )

@@ -15,6 +15,7 @@ type RankingTableProps = {
   onRowOpen?: (playerKey: string) => void
   onBaseStatsHeaderClick?: () => void
   onStatsPlusHeaderClick?: () => void
+  onLevelHeaderClick?: () => void
   onScoreHeaderClick?: () => void
 }
 
@@ -62,6 +63,7 @@ export default function RankingTable({
   onRowOpen,
   onBaseStatsHeaderClick,
   onStatsPlusHeaderClick,
+  onLevelHeaderClick,
   onScoreHeaderClick,
 }: RankingTableProps) {
   const [brokenClassIds, setBrokenClassIds] = useState<Set<number>>(() => new Set())
@@ -132,7 +134,16 @@ export default function RankingTable({
                 Stats +
               </button>
             </th>
-            <th>Level</th>
+            <th>
+              <button
+                type="button"
+                className="table-header-action"
+                title="Show Level interval details"
+                onClick={onLevelHeaderClick}
+              >
+                Level
+              </button>
+            </th>
             <th>Mine</th>
             <th>Treasury</th>
             <th>Coverage</th>
@@ -156,7 +167,6 @@ export default function RankingTable({
           {players.map((player) => {
             const latest = player.points[player.points.length - 1]
             const baseWindow = player.windowMetrics.baseStats[windowKey]
-            const levelWindow = player.windowMetrics.level[windowKey]
             const mineWindow = player.windowMetrics.mine[windowKey]
             const treasuryWindow = player.windowMetrics.treasury[windowKey]
             const isSelected = selectedPlayerKey === player.playerKey
@@ -189,8 +199,8 @@ export default function RankingTable({
                 <td>{renderClassCell(player.classId)}</td>
                 <td>{player.latestGuildName ?? player.latestGuildKey ?? '-'}</td>
                 <td>
-                  <div className="table-main">{formatNumber(player.baseStatsPerDayYear, 1)}</div>
-                  <div className="table-sub">{formatOptional(baseWindow?.perDay, 1)}</div>
+                  <div className="table-main">{formatOptional(baseWindow?.perDay, 1)}</div>
+                  <div className="table-sub">{formatNumber(player.baseStatsPerDayYear, 1)}</div>
                 </td>
                 <td>
                   <div className="table-main">{formatDelta(baseWindow?.delta)}</div>
@@ -198,7 +208,19 @@ export default function RankingTable({
                 </td>
                 <td>
                   <div className="table-main">{formatInt(latest?.level ?? 0)}</div>
-                  <div className="table-sub">{formatInt(levelWindow?.delta ?? 0)}</div>
+                  <div className="table-sub">
+                    {(() => {
+                      const breakdown =
+                        player.scoreBreakdownByWindow?.[windowKey] ??
+                        player.scoreDebugByWindow?.[windowKey]
+                      const levelInfo = breakdown?.level
+                      if (!levelInfo?.levelKnown || levelInfo.levelDelta === null) {
+                        return '—'
+                      }
+                      const displayDelta = Math.max(0, levelInfo.levelDelta)
+                      return formatInt(displayDelta)
+                    })()}
+                  </div>
                 </td>
                 <td>
                   <div className="table-main">{formatNumber(mineWindow?.perDay ?? 0, 2)}</div>
@@ -246,11 +268,23 @@ export default function RankingTable({
                         {tag}
                       </span>
                     ))}
-                    {player.tags.weaknesses.map((tag) => (
-                      <span key={`w-${player.playerKey}-${tag}`} className="tag tag-weak">
-                        {tag}
-                      </span>
-                    ))}
+                    {(() => {
+                      const breakdown =
+                        player.scoreBreakdownByWindow?.[windowKey] ??
+                        player.scoreDebugByWindow?.[windowKey]
+                      const lowLeveling = breakdown?.level?.lowLeveling
+                      const weaknesses = player.tags.weaknesses.filter(
+                        (tag) => tag !== 'Low Leveling',
+                      )
+                      if (lowLeveling) {
+                        weaknesses.push('Low Leveling')
+                      }
+                      return weaknesses.map((tag) => (
+                        <span key={`w-${player.playerKey}-${tag}`} className="tag tag-weak">
+                          {tag}
+                        </span>
+                      ))
+                    })()}
                   </div>
                 </td>
               </tr>

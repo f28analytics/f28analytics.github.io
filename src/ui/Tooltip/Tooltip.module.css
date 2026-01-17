@@ -1,0 +1,55 @@
+.tooltipWrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+}
+
+.bubble {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  display: flex;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.tooltipWrapper:focus-within .bubble,
+.tooltipWrapper:hover .bubble {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.card {
+  position: relative;
+  padding: 8px 10px;
+  background: #1d2f4a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: #dbe8ff;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  max-width: 260px;
+}
+
+.tail {
+  position: absolute;
+  left: 14px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: #1d2f4a;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  transform: rotate(45deg);
+}

@@ -1,6 +1,6 @@
 import type { MappedPlayer, MappedScan, RawScanPlayer } from '../../lib/sfscan/types'
 import { toOtherPlayer } from '../../lib/sfscan/toOther'
-import type { NormalizedGuild, NormalizedMember, NormalizedSnapshot } from '../types'
+import type { LevelSource, NormalizedGuild, NormalizedMember, NormalizedSnapshot } from '../types'
 
 const parseIdFromIdentifier = (identifier: unknown, pattern: RegExp): number | undefined => {
   if (typeof identifier !== 'string') return undefined
@@ -40,6 +40,8 @@ const INDEX_BASE_START = 21
 const INDEX_BASE_END = 25
 const INDEX_MINE = 212
 const INDEX_TREASURY = 217
+const LEVEL_MAX_REASONABLE = 1000
+const GROUP_LEVEL_START_INDEX = 64
 
 const getSaveValue = (save: unknown[], index: number): number => {
   const value = save[index]
@@ -60,6 +62,9 @@ const sumSaveRange = (save: unknown[], start: number, end: number): number => {
 
 const getSaveArray = (value: unknown): unknown[] =>
   Array.isArray(value) ? (value as unknown[]) : []
+
+const isValidLevel = (value: number): boolean =>
+  Number.isFinite(value) && value > 0 && value <= LEVEL_MAX_REASONABLE
 
 const getSave261 = (player: MappedPlayer, raw: RawScanPlayer): unknown[] => {
   const models = player.models as Record<string, unknown> | undefined
@@ -115,12 +120,25 @@ export function mappedScanToNormalized(scan: MappedScan): NormalizedSnapshot {
     : new Date().toISOString()
 
   const guildNameMap = new Map<string, string>()
+  const guildLevelMap = new Map<string, { names: string[]; save: unknown[] }>()
   scan.groups.forEach((group) => {
     const raw = group.raw as Record<string, unknown>
     const identifier = typeof raw.identifier === 'string' ? raw.identifier : group.guildIdentifier
     if (identifier) {
       const name = typeof raw.name === 'string' ? raw.name : identifier
       guildNameMap.set(identifier, name)
+    }
+    const server = normalizeServer(group.server) ?? normalizeServer(raw.prefix) ?? 'unknown'
+    const guildId = identifier ? parseGuildId(identifier) : group.guildId
+    const fallbackGuildKey =
+      guildId !== undefined ? `${server}_g${guildId}` : `${server}_g_unknown`
+    const guildKey = identifier ?? fallbackGuildKey
+    const names = Array.isArray(raw.names)
+      ? raw.names.filter((item): item is string => typeof item === 'string')
+      : []
+    const save = getSaveArray(raw.save)
+    if (names.length && save.length >= GROUP_LEVEL_START_INDEX + names.length) {
+      guildLevelMap.set(guildKey, { names, save })
     }
   })
 
@@ -141,6 +159,23 @@ export function mappedScanToNormalized(scan: MappedScan): NormalizedSnapshot {
 
     const save261 = getSave261(player, player.raw)
 
+    let level = getSaveValue(save261, INDEX_LEVEL)
+    let levelSource: LevelSource = 'player'
+    if (!isValidLevel(level)) {
+      const groupLevel = guildLevelMap.get(guildKey)
+      if (groupLevel) {
+        const nameIndex = groupLevel.names.indexOf(name)
+        if (nameIndex >= 0) {
+          const levelIndex = GROUP_LEVEL_START_INDEX + nameIndex
+          level = getSaveValue(groupLevel.save, levelIndex)
+          levelSource = 'guild'
+        }
+      }
+    }
+    if (!isValidLevel(level)) {
+      levelSource = 'unknown'
+    }
+
     const member: NormalizedMember = {
       playerKey,
       name,
@@ -148,7 +183,8 @@ export function mappedScanToNormalized(scan: MappedScan): NormalizedSnapshot {
       playerId: playerId,
       classId,
       baseStats: sumSaveRange(save261, INDEX_BASE_START, INDEX_BASE_END),
-      level: getSaveValue(save261, INDEX_LEVEL),
+      level,
+      levelSource,
       exp: getSaveValue(save261, INDEX_EXP),
       expNext: getSaveValue(save261, INDEX_EXP_NEXT),
       mine: getSaveValue(save261, INDEX_MINE),

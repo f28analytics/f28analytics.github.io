@@ -1,7 +1,9 @@
 import { useId, useMemo } from 'react'
+import Tooltip from '../Tooltip/Tooltip'
 
 type AnchoredLineChartProps = {
   points: number[]
+  dotTooltips?: string[]
   avgValue?: number | null
   showAvg?: boolean
   showFill?: boolean
@@ -27,6 +29,7 @@ const clamp = (value: number, min: number, max: number) =>
 
 export default function AnchoredLineChart({
   points,
+  dotTooltips,
   avgValue = null,
   showAvg = true,
   showFill = true,
@@ -87,63 +90,78 @@ export default function AnchoredLineChart({
   }, [points, avgValue, showAvg, showDots, plotWidth, plotHeight])
 
   return (
-    <svg
-      viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
-      preserveAspectRatio="none"
-      className={`player-profile__trend-chart ${className ?? ''}`.trim()}
-      role="img"
-      aria-label="Anchored trend"
-    >
-      <g
-        className="player-profile__trend-grid"
-        opacity="0.55"
-        stroke="rgba(43,76,115,0.55)"
-        strokeWidth={1}
+    <div className="player-profile__trend-wrapper">
+      <svg
+        viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
+        preserveAspectRatio="none"
+        className={`player-profile__trend-chart ${className ?? ''}`.trim()}
+        role="img"
+        aria-label="Anchored trend"
       >
-        {GRID_V.map((x, index) => (
-          <line key={`gv-${index}`} x1={x} x2={x} y1={0} y2={VIEWBOX_HEIGHT} />
-        ))}
-        {GRID_H.map((y, index) => (
-          <line key={`gh-${index}`} x1={0} x2={VIEWBOX_WIDTH} y1={y} y2={y} />
-        ))}
-      </g>
-
-      {showAvg && avgY != null && (
-        <g className="player-profile__trend-avg">
-          <text x={12} y={20} className="player-profile__trend-avg-label">
-            Avg
-          </text>
-          <line x1={0} x2={VIEWBOX_WIDTH} y1={avgY} y2={avgY} />
-        </g>
-      )}
-
-      {showFill && areaPath && (
-        <defs>
-          <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="rgba(92, 139, 198, 0.28)" />
-            <stop offset="100%" stopColor="rgba(92, 139, 198, 0)" />
-          </linearGradient>
-        </defs>
-      )}
-      {showFill && areaPath && (
-        <path d={areaPath} className="player-profile__trend-area" fill={`url(#${gradientId})`} />
-      )}
-
-      {linePath && <path d={linePath} className="player-profile__trend-line" fill="none" />}
-
-      {dots.map((dot, index) => (
-        <circle key={`dot-${index}`} cx={dot.x} cy={dot.y} r={4} className="player-profile__trend-dot" />
-      ))}
-
-      {showXLabels && (
-        <g className="player-profile__trend-xlabels">
-          {labels.map((label, index) => (
-            <text key={`lbl-${index}`} x={label.x} y={VIEWBOX_HEIGHT - 8} textAnchor="middle">
-              {label.text}
-            </text>
+        <g
+          className="player-profile__trend-grid"
+          opacity="0.55"
+          stroke="rgba(43,76,115,0.55)"
+          strokeWidth={1}
+        >
+          {GRID_V.map((x, index) => (
+            <line key={`gv-${index}`} x1={x} x2={x} y1={0} y2={VIEWBOX_HEIGHT} />
+          ))}
+          {GRID_H.map((y, index) => (
+            <line key={`gh-${index}`} x1={0} x2={VIEWBOX_WIDTH} y1={y} y2={y} />
           ))}
         </g>
+
+        {showAvg && avgY != null && (
+          <g className="player-profile__trend-avg">
+            <text x={12} y={20} className="player-profile__trend-avg-label">
+              Avg
+            </text>
+            <line x1={0} x2={VIEWBOX_WIDTH} y1={avgY} y2={avgY} />
+          </g>
+        )}
+
+        {showFill && areaPath && (
+          <defs>
+            <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="rgba(92, 139, 198, 0.28)" />
+              <stop offset="100%" stopColor="rgba(92, 139, 198, 0)" />
+            </linearGradient>
+          </defs>
+        )}
+        {showFill && areaPath && (
+          <path d={areaPath} className="player-profile__trend-area" fill={`url(#${gradientId})`} />
+        )}
+
+        {linePath && <path d={linePath} className="player-profile__trend-line" fill="none" />}
+
+        {showXLabels && (
+          <g className="player-profile__trend-xlabels">
+            {labels.map((label, index) => (
+              <text key={`lbl-${index}`} x={label.x} y={VIEWBOX_HEIGHT - 8} textAnchor="middle">
+                {label.text}
+              </text>
+            ))}
+          </g>
+        )}
+      </svg>
+
+      {showDots && dots.length > 0 && (
+        <div className="player-profile__trend-dots" aria-hidden="true">
+          {dots.map((dot, index) => {
+            const tooltip = dotTooltips?.[index]
+            const left = `${(dot.x / VIEWBOX_WIDTH) * 100}%`
+            const top = `${(dot.y / VIEWBOX_HEIGHT) * 100}%`
+            return (
+              <div key={`dot-${index}`} className="player-profile__trend-dot-anchor" style={{ left, top }}>
+                <Tooltip content={tooltip}>
+                  <span className="player-profile__trend-dot" />
+                </Tooltip>
+              </div>
+            )
+          })}
+        </div>
       )}
-    </svg>
+    </div>
   )
 }
