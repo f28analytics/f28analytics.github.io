@@ -2,6 +2,7 @@ import type {
   ManifestSnapshot,
   SaveIndexResult,
   ScanSource,
+  ScanLoadError,
   WorkerResult,
 } from '../data/types'
 
@@ -39,6 +40,7 @@ export type WorkerResultMessage = {
   type: 'result'
   datasetId: string
   payload: WorkerResult
+  errors?: ScanLoadError[]
 }
 
 export type WorkerSaveIndexMessage = {
@@ -49,6 +51,7 @@ export type WorkerSaveIndexMessage = {
 export type WorkerError = {
   type: 'error'
   error: string
+  errors?: ScanLoadError[]
 }
 
 export type WorkerResponse = WorkerProgress | WorkerResultMessage | WorkerSaveIndexMessage | WorkerError

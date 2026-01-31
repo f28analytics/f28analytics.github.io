@@ -16,6 +16,7 @@ import type {
   ManifestSnapshot,
   SaveIndexResult,
   ScanSource,
+  ScanLoadError,
   WindowKey,
   WorkerResult,
 } from './types'
@@ -33,6 +34,7 @@ type DataContextValue = {
   status: DataStatus
   statusMessage: string
   error: string | null
+  scanLoadErrors: ScanLoadError[]
   result: WorkerResult | null
   saveIndexResult: SaveIndexResult | null
   scanSources: ScanSource[]
@@ -54,6 +56,8 @@ const SELECTED_GUILDS_KEY = 'ga:selectedGuildKeys'
 const MEMBERLIST_COLUMNS_KEY = 'ga:memberlistColumns'
 const MEMBERLIST_POOL_KEY = 'ga:memberlistPoolKeys'
 const DEFAULT_WINDOW_KEY = 'ga:defaultWindowKey'
+
+const getBaseUrl = () => new URL(import.meta.env.BASE_URL, document.baseURI).toString()
 
 const repoDataset: DatasetConfig = {
   id: 'repo-scans',
@@ -166,6 +170,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<DataStatus>('idle')
   const [statusMessage, setStatusMessage] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [scanLoadErrors, setScanLoadErrors] = useState<ScanLoadError[]>([])
   const [result, setResult] = useState<WorkerResult | null>(null)
   const [saveIndexResult, setSaveIndexResult] = useState<SaveIndexResult | null>(null)
   const [selectedScanIds, setSelectedScanIds] = useState<string[]>(
@@ -190,7 +195,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const workerRef = useRef<Worker | null>(null)
 
   useEffect(() => {
-    const baseUrl = new URL('./', document.baseURI).toString()
+    const baseUrl = getBaseUrl()
     loadManifest(baseUrl)
       .then((data) => {
         setManifest(data)
@@ -231,6 +236,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setStatus('idle')
     setStatusMessage('')
     setError(null)
+    setScanLoadErrors([])
     setResult(null)
     setSaveIndexResult(null)
   }
@@ -269,6 +275,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         return
       }
       if (message.type === 'result') {
+        setScanLoadErrors(message.errors ?? [])
         setResult(message.payload)
         setStatus('ready')
         setStatusMessage('Ready')
@@ -318,6 +325,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
       if (message.type === 'error') {
         setError(message.error)
+        setScanLoadErrors(message.errors ?? [])
         setStatus('error')
         setStatusMessage('Error')
       }
@@ -339,11 +347,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setStatus('custom')
       setStatusMessage('Custom parsing not configured.')
       setError(null)
+      setScanLoadErrors([])
       setResult(null)
       return
     }
 
-    const baseUrl = new URL('./', document.baseURI).toString()
+    const baseUrl = getBaseUrl()
     const guildFilterKeys = options?.guildKeys ?? selectedGuildKeys
 
     const memberlistColumns = readStoredMemberlistColumns()
@@ -353,12 +362,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!scanIds.length) {
         setStatus('error')
         setError('Select at least one scan source.')
+        setScanLoadErrors([])
         setResult(null)
         return
       }
       setStatus('loading')
       setStatusMessage('Starting worker...')
       setError(null)
+      setScanLoadErrors([])
       setSaveIndexResult(null)
 
       const worker = startWorker()
@@ -385,6 +396,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setStatus('loading')
     setStatusMessage('Starting worker...')
     setError(null)
+    setScanLoadErrors([])
     setSaveIndexResult(null)
 
     const worker = startWorker()
@@ -423,6 +435,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     status,
     statusMessage,
     error,
+    scanLoadErrors,
     result,
     saveIndexResult,
     scanSources,

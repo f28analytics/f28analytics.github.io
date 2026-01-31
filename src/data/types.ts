@@ -19,6 +19,17 @@ export type ScanSource = {
   notes?: string
 }
 
+export type ScanLoadError = {
+  id: string
+  label: string
+  path: string
+  url: string
+  status: number
+  contentType: string | null
+  reason: string
+  preview?: string
+}
+
 export type ManifestSnapshot = {
   id: string
   label: string

@@ -7,6 +7,7 @@ import type {
   LatestPlayerEntry,
   ManifestSnapshot,
   NormalizedSnapshot,
+  ScanLoadError,
   SaveIndexResult,
   SaveIndexGuildSeries,
   SaveIndexPlayerSeries,
@@ -37,6 +38,115 @@ let repoCache: RepoCacheSnapshot[] = []
 
 const postProgress = (message: string) => {
   ctx.postMessage({ type: 'progress', message } satisfies WorkerResponse)
+}
+
+const PREVIEW_LIMIT = 300
+
+type FetchMeta = {
+  id: string
+  label: string
+  path: string
+}
+
+const truncatePreview = (value: string) =>
+  value.length > PREVIEW_LIMIT ? `${value.slice(0, PREVIEW_LIMIT)}...` : value
+
+const isJsonContentType = (value: string | null) =>
+  typeof value === 'string' && value.toLowerCase().includes('json')
+
+const buildScanLoadError = (
+  meta: FetchMeta,
+  url: string,
+  status: number,
+  contentType: string | null,
+  reason: string,
+  preview?: string,
+): ScanLoadError => ({
+  id: meta.id,
+  label: meta.label,
+  path: meta.path,
+  url,
+  status,
+  contentType,
+  reason,
+  preview: preview ? truncatePreview(preview) : undefined,
+})
+
+const isScanLoadError = (error: unknown): error is ScanLoadError =>
+  typeof error === 'object' &&
+  error !== null &&
+  'id' in error &&
+  'label' in error &&
+  'url' in error &&
+  'reason' in error
+
+const fetchJson = async (url: string, meta: FetchMeta): Promise<unknown> => {
+  let response: Response
+  try {
+    response = await fetch(url)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Network error'
+    throw buildScanLoadError(meta, url, 0, null, reason)
+  }
+
+  const contentType = response.headers.get('content-type')
+  let cachedText: string | null = null
+  const readText = async () => {
+    if (cachedText === null) {
+      try {
+        cachedText = await response.text()
+      } catch {
+        cachedText = ''
+      }
+    }
+    return cachedText
+  }
+
+  if (!response.ok) {
+    const preview = await readText()
+    throw buildScanLoadError(
+      meta,
+      url,
+      response.status,
+      contentType,
+      'Request failed',
+      preview,
+    )
+  }
+
+  if (!isJsonContentType(contentType)) {
+    const preview = await readText()
+    throw buildScanLoadError(
+      meta,
+      url,
+      response.status,
+      contentType,
+      'Non-JSON response',
+      preview,
+    )
+  }
+
+  const text = await readText()
+  try {
+    return JSON.parse(text) as unknown
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Invalid JSON'
+    throw buildScanLoadError(meta, url, response.status, contentType, reason, text)
+  }
+}
+
+const toScanLoadError = (error: unknown, fallback: FetchMeta & { url: string }): ScanLoadError => {
+  if (isScanLoadError(error)) {
+    return error
+  }
+  const reason = error instanceof Error ? error.message : 'Unknown error'
+  return buildScanLoadError(fallback, fallback.url, 0, null, reason)
+}
+
+const formatScanLoadError = (error: ScanLoadError) => {
+  const status = error.status ? `HTTP ${error.status}` : 'Request failed'
+  const contentType = error.contentType ?? 'unknown'
+  return `${error.label} (${error.id}) failed: ${error.reason}. ${status}, content-type ${contentType}. URL: ${error.url}`
 }
 
 const toDate = (value: string) => new Date(value)
@@ -270,11 +380,11 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       for (const snapshot of snapshots) {
         postProgress(`Fetching ${snapshot.label}`)
         const url = new URL(snapshot.path, baseUrl).toString()
-        const response = await fetch(url)
-        if (!response.ok) {
-          throw new Error(`Snapshot fetch failed (${snapshot.id})`)
-        }
-        const raw = (await response.json()) as unknown
+        const raw = await fetchJson(url, {
+          id: snapshot.id,
+          label: snapshot.label,
+          path: snapshot.path,
+        })
         const parsed = adapter.normalize(raw, snapshot)
         normalized.push(parsed)
       }
@@ -313,25 +423,51 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       postProgress('Loading repo scans...')
       const normalized: NormalizedSnapshot[] = []
       repoCache = []
+      const loadedSources: ScanSource[] = []
+      const errors: ScanLoadError[] = []
       for (const source of selectedSources) {
         postProgress(`Fetching ${source.label}`)
         const url = new URL(source.path, baseUrl).toString()
-        const response = await fetch(url)
-        if (!response.ok) {
-          throw new Error(`Scan fetch failed (${source.id})`)
+        try {
+          const raw = await fetchJson(url, {
+            id: source.id,
+            label: source.label,
+            path: source.path,
+          })
+          const mapped = mapSfScanJson(raw as Record<string, unknown>)
+          const snapshot = mappedScanToNormalized(mapped)
+          normalized.push(snapshot)
+          repoCache.push(buildRepoCache(mapped))
+          loadedSources.push(source)
+        } catch (error) {
+          errors.push(
+            toScanLoadError(error, {
+              id: source.id,
+              label: source.label,
+              path: source.path,
+              url,
+            }),
+          )
         }
-        const raw = (await response.json()) as unknown
-        const mapped = mapSfScanJson(raw as Record<string, unknown>)
-        const snapshot = mappedScanToNormalized(mapped)
-        normalized.push(snapshot)
-        repoCache.push(buildRepoCache(mapped))
+      }
+
+      if (!normalized.length) {
+        const message = errors.length
+          ? `All selected scans failed to load. ${formatScanLoadError(errors[0])}`
+          : 'All selected scans failed to load.'
+        ctx.postMessage({
+          type: 'error',
+          error: message,
+          errors: errors.length ? errors : undefined,
+        } satisfies WorkerResponse)
+        return
       }
 
       const latestSnapshot = getLatestSnapshot(normalized)
       const roster = buildGuildRoster(latestSnapshot)
       const latestPlayers = buildLatestPlayers(latestSnapshot)
       const defaultGuildKeys = resolveDefaultGuilds(roster)
-      const manifestSnapshots = manifestFromRepoScans(selectedSources, normalized, datasetId)
+      const manifestSnapshots = manifestFromRepoScans(loadedSources, normalized, datasetId)
 
       postProgress('Computing metrics...')
       const result = computeDataset(normalized, manifestSnapshots, datasetId, {
@@ -341,11 +477,24 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       result.guildRoster = roster
       result.defaultGuildKeys = defaultGuildKeys
       result.latestPlayers = latestPlayers
-      ctx.postMessage({ type: 'result', datasetId, payload: result } satisfies WorkerResponse)
+      ctx.postMessage({
+        type: 'result',
+        datasetId,
+        payload: result,
+        errors: errors.length ? errors : undefined,
+      } satisfies WorkerResponse)
       return
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown worker error'
-    ctx.postMessage({ type: 'error', error: message } satisfies WorkerResponse)
+    const message = isScanLoadError(error)
+      ? formatScanLoadError(error)
+      : error instanceof Error
+        ? error.message
+        : 'Unknown worker error'
+    ctx.postMessage({
+      type: 'error',
+      error: message,
+      errors: isScanLoadError(error) ? [error] : undefined,
+    } satisfies WorkerResponse)
   }
 }

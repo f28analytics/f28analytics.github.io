@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useData } from '../data/store'
-import type { GuildRosterEntry } from '../data/types'
+import type { GuildRosterEntry, ScanLoadError } from '../data/types'
 
 const toggleSelection = (list: string[], key: string, limit?: number) => {
   if (list.includes(key)) {
@@ -106,6 +106,12 @@ const buildServerSummary = (groups: ServerGroupData[]): string | null => {
   return entries.length ? entries.join(', ') : null
 }
 
+const formatScanErrorMeta = (error: ScanLoadError) => {
+  const status = error.status ? `HTTP ${error.status}` : 'Request failed'
+  const contentType = error.contentType ?? 'unknown'
+  return `${status}, content-type ${contentType}`
+}
+
 export default function ImportPage() {
   const {
     manifest,
@@ -113,6 +119,7 @@ export default function ImportPage() {
     status,
     statusMessage,
     error,
+    scanLoadErrors,
     result,
     scanSources,
     selectedScanIds,
@@ -206,6 +213,31 @@ export default function ImportPage() {
           Load Selected Scans
         </button>
       </div>
+
+      {scanLoadErrors.length > 0 && (
+        <div className="card warning">
+          <div className="list">
+            <div className="list-item">
+              <div>
+                <div className="list-title">Some scans failed to load</div>
+                <div className="list-sub">The remaining scans were still processed.</div>
+              </div>
+            </div>
+            {scanLoadErrors.map((scanError) => (
+              <div key={scanError.id} className="list-item">
+                <div>
+                  <div className="list-title">{scanError.label}</div>
+                  <div className="list-sub">{scanError.path}</div>
+                  <div className="list-sub">URL: {scanError.url}</div>
+                  <div className="list-sub">
+                    {scanError.reason} ({formatScanErrorMeta(scanError)})
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {status === 'error' && error && <div className="card warning">{error}</div>}
       {status === 'loading' && <div className="card">Worker: {statusMessage}</div>}

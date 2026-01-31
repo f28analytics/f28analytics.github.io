@@ -82,7 +82,7 @@ export const scanSources: ScanSource[] = [
   {
     id: 'serverscan-2026-01-31-eu-1-2-3-4',
     label: 'Serverscan 31.1.26',
-    path: 'scans/serverscan_eu_1_2_3_4_date_31_1_26.json',
+    path: 'scans/serverscan_eu_1_2_3_4_date_31_01_26.json',
     notes: 'Eu 1-4',
   },
 ]
