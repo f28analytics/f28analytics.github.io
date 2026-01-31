@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { PlayerComputed, WindowKey } from '../../data/types'
 import { getClassIconUrl, getClassMeta } from '../../data/classes'
+import { gold } from '../../lib/sf/calculations'
 import { formatInt, formatNumber } from '../format'
 
 type RankingTableProps = {
@@ -34,6 +35,94 @@ const formatOptional = (value?: number | null, digits = 1) => {
     return '--'
   }
   return value.toFixed(digits)
+}
+
+const COMP_FACTOR = 0.0003168
+const COMP_DIVISOR = 60.38647
+const SERVER_MONTHS: Record<string, number> = {
+  's1_eu': 0,
+  's2_eu': 1.5,
+  's3_eu': 3,
+  's4_eu': 4.5,
+  's1.sfgame.eu': 0,
+  's2.sfgame.eu': 1.5,
+  's3.sfgame.eu': 3,
+  's4.sfgame.eu': 4.5,
+}
+
+const COMPENSATED_GRADIENT_STOPS = [
+  { value: 1, color: '#d1d483' },
+  { value: 75000, color: '#c5d483' },
+  { value: 90000, color: '#bed483' },
+  { value: 100000, color: '#b4d483' },
+  { value: 110000, color: '#a7d483' },
+  { value: 120000, color: '#9ed483' },
+  { value: 125000, color: '#91d182' },
+  { value: 130000, color: '#85bf77' },
+  { value: 135000, color: '#75a868' },
+  { value: 140000, color: '#649159' },
+  { value: 145000, color: '#517548' },
+  { value: 150000, color: '#4a7340' },
+  { value: 160000, color: '#447039' },
+  { value: 175000, color: '#3a6b2e' },
+] as const
+
+const resolveServerMonth = (server?: string) => {
+  if (!server) {
+    return undefined
+  }
+  return SERVER_MONTHS[server.toLowerCase()]
+}
+
+const hexToRgb = (value: string) => {
+  const normalized = value.replace('#', '')
+  const r = parseInt(normalized.slice(0, 2), 16)
+  const g = parseInt(normalized.slice(2, 4), 16)
+  const b = parseInt(normalized.slice(4, 6), 16)
+  return { r, g, b }
+}
+
+const toHex = (value: number) => value.toString(16).padStart(2, '0')
+
+const interpolateColor = (from: string, to: string, ratio: number) => {
+  const fromRgb = hexToRgb(from)
+  const toRgb = hexToRgb(to)
+  const r = Math.round(fromRgb.r + (toRgb.r - fromRgb.r) * ratio)
+  const g = Math.round(fromRgb.g + (toRgb.g - fromRgb.g) * ratio)
+  const b = Math.round(fromRgb.b + (toRgb.b - fromRgb.b) * ratio)
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+}
+
+const getGradientColor = (value: number) => {
+  if (value <= COMPENSATED_GRADIENT_STOPS[0].value) {
+    return COMPENSATED_GRADIENT_STOPS[0].color
+  }
+  const last = COMPENSATED_GRADIENT_STOPS[COMPENSATED_GRADIENT_STOPS.length - 1]
+  if (value >= last.value) {
+    return last.color
+  }
+  for (let index = 0; index < COMPENSATED_GRADIENT_STOPS.length - 1; index += 1) {
+    const lower = COMPENSATED_GRADIENT_STOPS[index]
+    const upper = COMPENSATED_GRADIENT_STOPS[index + 1]
+    if (value <= upper.value) {
+      const ratio = (value - lower.value) / (upper.value - lower.value)
+      return interpolateColor(lower.color, upper.color, ratio)
+    }
+  }
+  return last.color
+}
+
+const getCompValues = (player: PlayerComputed) => {
+  const latestPoint = player.points[player.points.length - 1]
+  const baseStatsCurrent = latestPoint?.baseStats ?? 0
+  const level = latestPoint?.level ?? 0
+  const month = resolveServerMonth(player.server)
+  const compBonus =
+    month === undefined
+      ? null
+      : Math.floor((gold(level) / COMP_DIVISOR) * COMP_FACTOR * month)
+  const compensatedBaseSum = compBonus === null ? null : baseStatsCurrent + compBonus
+  return { baseStatsCurrent, compBonus, compensatedBaseSum }
 }
 
 const normalizeClassId = (value?: number | null) => {
@@ -114,6 +203,9 @@ export default function RankingTable({
             <th>Player</th>
             <th>Class</th>
             <th>Guild</th>
+            <th>Base Stats (current)</th>
+            <th>Compensation Bonus</th>
+            <th className="compensated-header">Compensated Base Sum</th>
             <th>
               <button
                 type="button"
@@ -175,6 +267,15 @@ export default function RankingTable({
             const showPoolTag = showPoolMarking && poolKeySet
             const isPoolMember = showPoolTag ? poolKeySet?.has(player.playerKey) : false
             const statuses = statusByKey?.get(player.playerKey) ?? []
+            const { baseStatsCurrent, compBonus, compensatedBaseSum } = getCompValues(player)
+            const compensatedStyle =
+              compensatedBaseSum == null
+                ? undefined
+                : (() => {
+                    const color = getGradientColor(compensatedBaseSum)
+                    const rgb = hexToRgb(color)
+                    return { backgroundColor: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.22)` }
+                  })()
             return (
               <tr
                 key={player.playerKey}
@@ -198,6 +299,13 @@ export default function RankingTable({
                 </td>
                 <td>{renderClassCell(player.classId)}</td>
                 <td>{player.latestGuildName ?? player.latestGuildKey ?? '-'}</td>
+                <td>{formatNumber(baseStatsCurrent, 0)}</td>
+                <td>
+                  {compBonus === null ? '--' : `+${formatNumber(compBonus, 0)}`}
+                </td>
+                <td style={compensatedStyle}>
+                  {compensatedBaseSum === null ? '--' : formatNumber(compensatedBaseSum, 0)}
+                </td>
                 <td>
                   <div className="table-main">{formatOptional(baseWindow?.perDay, 1)}</div>
                   <div className="table-sub">{formatNumber(player.baseStatsPerDayYear, 1)}</div>

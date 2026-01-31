@@ -8,6 +8,7 @@ import type {
   PlayerComputed,
   PlayerWindowEntry,
 } from '../data/types'
+import { gold } from '../lib/sf/calculations'
 import { formatDate, formatNumber } from '../ui/format'
 
 const WINDOW_KEYS: WindowKey[] = ['1', '3', '6', '12']
@@ -17,6 +18,19 @@ const METRICS: { key: MetricKey; label: string }[] = [
   { key: 'mine', label: 'Mine Delta' },
   { key: 'treasury', label: 'Treasury Delta' },
 ]
+
+const COMP_FACTOR = 0.0003168
+const COMP_DIVISOR = 60.38647
+const SERVER_MONTHS: Record<string, number> = {
+  's1_eu': 0,
+  's2_eu': 1.5,
+  's3_eu': 3,
+  's4_eu': 4.5,
+  's1.sfgame.eu': 0,
+  's2.sfgame.eu': 1.5,
+  's3.sfgame.eu': 3,
+  's4.sfgame.eu': 4.5,
+}
 
 const MEMBERLIST_COLUMNS_KEY = 'ga:memberlistColumns'
 const MEMBERLIST_CARD_NAMES_KEY = 'ga:memberlistCardNames'
@@ -38,6 +52,9 @@ type DashboardGuild = {
   baseStatsMedianLatest: number
   mineMedianLatest: number
   treasuryMedianLatest: number
+  avgBaseStatsCurrent: number | null
+  avgCompBonus: number | null
+  avgCompensatedBaseSum: number | null
 }
 
 const emptyColumns = (): Record<MemberlistColumn, string[]> => ({
@@ -153,6 +170,9 @@ const diffDays = (start: string, end: string) => {
 const average = (values: number[]) =>
   values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
 
+const averageOptional = (values: number[]) =>
+  values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+
 const median = (values: number[]) => {
   if (!values.length) {
     return 0
@@ -169,6 +189,26 @@ const weightedPerDay = (intervals: IntervalMetric[]) => {
   const totalDays = intervals.reduce((sum, interval) => sum + interval.days, 0)
   const totalDelta = intervals.reduce((sum, interval) => sum + interval.delta, 0)
   return totalDays > 0 ? totalDelta / totalDays : 0
+}
+
+const resolveServerMonth = (server?: string) => {
+  if (!server) {
+    return undefined
+  }
+  return SERVER_MONTHS[server.toLowerCase()]
+}
+
+const getCompValues = (player: PlayerComputed) => {
+  const latestPoint = player.points[player.points.length - 1]
+  const baseStatsCurrent = latestPoint?.baseStats ?? 0
+  const level = latestPoint?.level ?? 0
+  const month = resolveServerMonth(player.server)
+  const compBonus =
+    month === undefined
+      ? null
+      : Math.floor((gold(level) / COMP_DIVISOR) * COMP_FACTOR * month)
+  const compensatedBaseSum = compBonus === null ? null : baseStatsCurrent + compBonus
+  return { baseStatsCurrent, compBonus, compensatedBaseSum }
 }
 
 const summarizeWindowIntervals = (intervals: IntervalMetric[], windowKey: WindowKey) => {
@@ -283,10 +323,19 @@ const buildCardGuild = (
     string,
     { baseStats: number[]; level: number[]; mine: number[]; treasury: number[] }
   >()
+  const baseStatsCurrentValues: number[] = []
+  const compBonusValues: number[] = []
+  const compensatedValues: number[] = []
 
   players.forEach((player) => {
     if (!keySet.has(player.playerKey)) {
       return
+    }
+    const compValues = getCompValues(player)
+    baseStatsCurrentValues.push(compValues.baseStatsCurrent)
+    if (compValues.compBonus != null && compValues.compensatedBaseSum != null) {
+      compBonusValues.push(compValues.compBonus)
+      compensatedValues.push(compValues.compensatedBaseSum)
     }
     player.points.forEach((point) => {
       const entry =
@@ -328,6 +377,9 @@ const buildCardGuild = (
   const minePerDayYear = weightedPerDay(mineIntervals)
   const treasuryPerDayYear = weightedPerDay(treasuryIntervals)
   const lastPoint = points[points.length - 1]
+  const avgBaseStatsCurrent = averageOptional(baseStatsCurrentValues)
+  const avgCompBonus = averageOptional(compBonusValues)
+  const avgCompensatedBaseSum = averageOptional(compensatedValues)
 
   return {
     guildKey: cardKey,
@@ -347,6 +399,9 @@ const buildCardGuild = (
     baseStatsMedianLatest: lastPoint?.baseStatsMedian ?? 0,
     mineMedianLatest: lastPoint?.mineMedian ?? 0,
     treasuryMedianLatest: lastPoint?.treasuryMedian ?? 0,
+    avgBaseStatsCurrent,
+    avgCompBonus,
+    avgCompensatedBaseSum,
   }
 }
 
@@ -601,6 +656,14 @@ export default function Dashboard() {
           const mineWindow = summarizeWindowIntervals(mineIntervals, windowKey)
           const treasuryWindow = summarizeWindowIntervals(treasuryIntervals, windowKey)
           const windowLabel = `${windowKey} mo`
+          const avgBaseStatsLabel =
+            guild.avgBaseStatsCurrent == null ? '--' : formatNumber(guild.avgBaseStatsCurrent, 0)
+          const avgCompBonusLabel =
+            guild.avgCompBonus == null ? '--' : `+${formatNumber(guild.avgCompBonus, 0)}`
+          const avgCompSumLabel =
+            guild.avgCompensatedBaseSum == null
+              ? '--'
+              : formatNumber(guild.avgCompensatedBaseSum, 0)
           return (
             <div key={guild.guildKey} className="card">
               <div className="card-header">
@@ -645,6 +708,21 @@ export default function Dashboard() {
                   <div className="muted">
                     Window {windowLabel} · {formatNumber(treasuryWindow.delta, 0)} total
                   </div>
+                </div>
+                <div>
+                  <div className="stat-label">Avg Base Stats (current)</div>
+                  <div className="stat-value">{avgBaseStatsLabel}</div>
+                  <div className="muted">Average</div>
+                </div>
+                <div>
+                  <div className="stat-label">Avg Compensation Bonus</div>
+                  <div className="stat-value">{avgCompBonusLabel}</div>
+                  <div className="muted">Average</div>
+                </div>
+                <div>
+                  <div className="stat-label">Avg Compensated Base Sum</div>
+                  <div className="stat-value">{avgCompSumLabel}</div>
+                  <div className="muted">Average</div>
                 </div>
               </div>
             </div>

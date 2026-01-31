@@ -78,8 +78,8 @@ export const CLASSES: ClassMeta[] = [
   { id: 5, key: 'battle-mage', label: 'Battle Mage', iconUrl: driveViewUrl(DRIVE['battle-mage']) },
   { id: 6, key: 'berserker', label: 'Berserker', iconUrl: driveViewUrl(DRIVE.berserker) },
   { id: 7, key: 'demon-hunter', label: 'Demon Hunter', iconUrl: driveViewUrl(DRIVE['demon-hunter']) },
-  { id: 9, key: 'bard', label: 'Bard', iconUrl: driveViewUrl(DRIVE.bard) },
-  { id: 8, key: 'druid', label: 'Druid', iconUrl: driveViewUrl(DRIVE.druid) },
+  { id: 8, key: 'bard', label: 'Bard', iconUrl: driveViewUrl(DRIVE.bard) },
+  { id: 9, key: 'druid', label: 'Druid', iconUrl: driveViewUrl(DRIVE.druid) },
   { id: 10, key: 'necromancer', label: 'Necromancer', iconUrl: driveViewUrl(DRIVE.necromancer) },
   { id: 11, key: 'paladin', label: 'Paladin', iconUrl: driveViewUrl(DRIVE.paladin) },
 ]

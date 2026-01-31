@@ -9,3 +9,7 @@
   background: var(--panel-strong);
   z-index: 2;
 }
+
+.ranking-table thead th.compensated-header {
+  background: #5e4978;
+}

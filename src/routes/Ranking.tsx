@@ -2,12 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../data/store'
 import type { PlayerComputed, WindowKey } from '../data/types'
+import { gold } from '../lib/sf/calculations'
 import RankingTable from '../ui/tables/RankingTable'
 import RankingIntervalsFlyout from '../ui/RankingIntervalsFlyout'
 import RankingScoreFlyout from '../ui/RankingScoreFlyout'
 import './Ranking.css'
 
-type SortKey = 'score' | 'baseStats' | 'statsPlus' | 'level' | 'mine' | 'treasury'
+type SortKey =
+  | 'score'
+  | 'baseStats'
+  | 'statsPlus'
+  | 'level'
+  | 'mine'
+  | 'treasury'
+  | 'baseStatsCurrent'
+  | 'compBonus'
+  | 'compensatedBaseSum'
 type FlyoutSource = 'baseStats' | 'statsPlus' | 'level'
 type TabKey = 'ranking' | 'scouting'
 type StatusLabel = 'Main' | 'Wing' | 'Watchlist'
@@ -16,6 +26,39 @@ const WINDOW_KEYS: WindowKey[] = ['1', '3', '6', '12']
 const MEMBERLIST_COLUMNS_KEY = 'ga:memberlistColumns'
 const MEMBERLIST_COLUMNS = ['col-1', 'col-2', 'col-3'] as const
 type MemberlistColumn = (typeof MEMBERLIST_COLUMNS)[number]
+
+const COMP_FACTOR = 0.0003168
+const COMP_DIVISOR = 60.38647
+const SERVER_MONTHS: Record<string, number> = {
+  's1_eu': 0,
+  's2_eu': 1.5,
+  's3_eu': 3,
+  's4_eu': 4.5,
+  's1.sfgame.eu': 0,
+  's2.sfgame.eu': 1.5,
+  's3.sfgame.eu': 3,
+  's4.sfgame.eu': 4.5,
+}
+
+const resolveServerMonth = (server?: string) => {
+  if (!server) {
+    return undefined
+  }
+  return SERVER_MONTHS[server.toLowerCase()]
+}
+
+const getCompValues = (player: PlayerComputed) => {
+  const latestPoint = player.points[player.points.length - 1]
+  const baseStatsCurrent = latestPoint?.baseStats ?? 0
+  const level = latestPoint?.level ?? 0
+  const month = resolveServerMonth(player.server)
+  const compBonus =
+    month === undefined
+      ? null
+      : Math.floor((gold(level) / COMP_DIVISOR) * COMP_FACTOR * month)
+  const compensatedBaseSum = compBonus === null ? null : baseStatsCurrent + compBonus
+  return { baseStatsCurrent, compBonus, compensatedBaseSum }
+}
 
 const emptyColumns = (): Record<MemberlistColumn, string[]> => ({
   'col-1': [],
@@ -211,10 +254,16 @@ export default function Ranking() {
       players = players.filter((player) => player.coverage.points >= minCoverage)
     }
     const sorted = [...players].sort((a, b) => {
-      const value = (player: PlayerComputed) => {
+      const value = (player: PlayerComputed): number | null => {
         switch (sortKey) {
           case 'baseStats':
             return player.baseStatsPerDayYear
+          case 'baseStatsCurrent':
+            return getCompValues(player).baseStatsCurrent
+          case 'compBonus':
+            return getCompValues(player).compBonus
+          case 'compensatedBaseSum':
+            return getCompValues(player).compensatedBaseSum
           case 'score':
             return player.scoreByWindow?.[windowKey] ?? player.score
           case 'statsPlus':
@@ -229,7 +278,18 @@ export default function Ranking() {
             return player.score
         }
       }
-      return value(b) - value(a)
+      const valueA = value(a)
+      const valueB = value(b)
+      if (valueA == null && valueB == null) {
+        return 0
+      }
+      if (valueA == null) {
+        return 1
+      }
+      if (valueB == null) {
+        return -1
+      }
+      return valueB - valueA
     })
     return sorted
   }, [
@@ -358,6 +418,9 @@ export default function Ranking() {
               onChange={(event) => setSortKey(event.target.value as SortKey)}
             >
               <option value="score">Score</option>
+              <option value="baseStatsCurrent">Base Stats (current)</option>
+              <option value="compBonus">Compensation Bonus</option>
+              <option value="compensatedBaseSum">Compensated Base Sum</option>
               <option value="baseStats">BaseStats/Day (Year)</option>
               <option value="statsPlus">Stats + (Window)</option>
               <option value="level">Level Delta (Window)</option>
