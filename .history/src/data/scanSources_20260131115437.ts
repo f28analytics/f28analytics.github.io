@@ -79,4 +79,10 @@ export const scanSources: ScanSource[] = [
     path: 'scans/serverscan_eu_1_2_3_4_date_1_1_25.json',
     notes: 'Eu 1-4',
   },
+  {
+    id: 'serverscan-2026-01-31-eu-1-2-3-4',
+    label: 'Serverscan 31.1.26',
+    path: 'scans/serverscan_eu_1_2_3_4_date_31_1_26.json',
+    notes: 'Eu 1-4',
+  },
 ]
